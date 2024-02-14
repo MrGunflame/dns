@@ -1,5 +1,5 @@
 use std::io;
-use std::net::SocketAddr;
+use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
 use std::time::Duration;
 
 use tokio::net::UdpSocket;
@@ -23,8 +23,15 @@ impl Resolvers {
         let resolver = self.resolvers.first().unwrap();
         let addr = *resolver.addrs.first().unwrap();
 
-        let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
-        socket.connect(addr).await.unwrap();
+        let local_addr = match addr {
+            SocketAddr::V4(_) => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
+            SocketAddr::V6(_) => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
+        };
+
+        let socket = UdpSocket::bind(local_addr)
+            .await
+            .map_err(ResolverError::Io)?;
+        socket.connect(addr).await.map_err(ResolverError::Io)?;
 
         let packet = Packet {
             transaction_id: rand::random(),
@@ -44,12 +51,12 @@ impl Resolvers {
         let mut buf = Vec::new();
         packet.encode(&mut buf);
 
-        socket.send(&buf).await.unwrap();
+        socket.send(&buf).await.map_err(ResolverError::Io)?;
 
         let mut buf = vec![0; 1500];
         let len = tokio::select! {
             len = socket.recv(&mut buf) => {
-                let len = len.unwrap();
+                let len = len.map_err(ResolverError::Io)?;
                 len
             }
             _ = tokio::time::sleep(resolver.timeout) => return Err(ResolverError::Timeout),
