@@ -12,9 +12,11 @@ pub struct ResolverQueue {
 impl ResolverQueue {
     pub async fn resolve(&mut self, question: &Question) -> Result<Resource, ResolverError> {
         if let Some(answer) = self.cache.get(&question) {
+            tracing::info!("using cached result (valid for {:?})", answer.ttl());
             return Ok(answer.clone());
         }
 
+        tracing::info!("looking up query");
         let answer = self.upstream.resolve(&question).await?;
         let res = Resource {
             r#type: answer.r#type,

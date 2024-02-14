@@ -23,7 +23,7 @@ impl Resolvers {
         let resolver = self.resolvers.first().unwrap();
         let addr = *resolver.addrs.first().unwrap();
 
-        let mut socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
+        let socket = UdpSocket::bind("0.0.0.0:0").await.unwrap();
         socket.connect(addr).await.unwrap();
 
         let packet = Packet {

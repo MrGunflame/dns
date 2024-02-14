@@ -3,17 +3,19 @@ mod resolve;
 mod upstream;
 
 use std::collections::HashMap;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 use std::vec;
 
 use bytes::{Buf, BufMut};
-use cache::{Cache, Resource};
+use cache::Cache;
 use resolve::ResolverQueue;
 use tokio::net::UdpSocket;
 use upstream::{Resolvers, UpstreamResolver};
 
 #[tokio::main]
 async fn main() {
+    pretty_env_logger::init();
+
     let socket = UdpSocket::bind("0.0.0.0:5353").await.unwrap();
 
     let mut state = ResolverQueue {
@@ -28,9 +30,15 @@ async fn main() {
 
     loop {
         let mut buf = vec![0; 1500];
-        let (len, addr) = socket.recv_from(&mut buf).await.unwrap();
+        let (len, addr) = tokio::select! {
+            res = socket.recv_from(&mut buf) => {
+                res.unwrap()
+            }
+            _ = state.cache.remove_expiring() => unreachable!(),
+        };
+
         buf.truncate(len);
-        println!("{:?}", addr);
+        tracing::info!("request from {:?}", addr);
 
         let packet = Packet::decode(&buf[..]).unwrap();
 
