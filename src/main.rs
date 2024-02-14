@@ -1,32 +1,33 @@
 mod cache;
-mod resolve;
+mod config;
+mod state;
 mod upstream;
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::net::SocketAddr;
 use std::vec;
 
 use bytes::{Buf, BufMut};
 use cache::Cache;
-use resolve::ResolverQueue;
+use config::Config;
+use state::State;
 use tokio::net::UdpSocket;
-use upstream::{Resolvers, UpstreamResolver};
+use upstream::Zones;
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
 
-    let socket = UdpSocket::bind("0.0.0.0:5353").await.unwrap();
+    let config = Config::from_file("./config.json");
 
-    let mut state = ResolverQueue {
+    let mut state = State {
         cache: Cache::default(),
-        upstream: Resolvers {
-            resolvers: vec![UpstreamResolver {
-                addrs: vec!["10.1.0.1:53".parse().unwrap()],
-                timeout: Duration::from_secs(3),
-            }],
-        },
+        config,
+        zones: Zones::default(),
     };
+    state.generate_zones();
+
+    let socket = UdpSocket::bind("0.0.0.0:5353").await.unwrap();
 
     loop {
         let mut buf = vec![0; 1500];
@@ -41,40 +42,69 @@ async fn main() {
         tracing::info!("request from {:?}", addr);
 
         let packet = Packet::decode(&buf[..]).unwrap();
-
-        let mut answers = Vec::new();
-
-        for question in &packet.questions {
-            let answer = state.resolve(question).await.unwrap();
-            answers.push(ResourceRecord {
-                name: question.name.clone(),
-                r#type: answer.r#type,
-                class: answer.class,
-                ttl: answer.ttl().as_secs() as u32,
-                rddata: answer.data.clone(),
-            });
-        }
-
-        let response = Packet {
-            transaction_id: packet.transaction_id,
-            qr: Qr::Response,
-            opcode: OpCode::Query,
-            authoritative_answer: false,
-            recursion_desired: packet.recursion_desired,
-            recursion_available: true,
-            truncated: false,
-            response_code: ResponseCode::Ok,
-            questions: packet.questions,
-            answers,
-            additional: Vec::new(),
-            authority: Vec::new(),
-        };
-
-        let mut buf = Vec::new();
-        response.encode(&mut buf);
-
-        socket.send_to(&buf, addr).await.unwrap();
+        handle_request(packet, addr, &socket, &mut state).await;
     }
+}
+
+async fn handle_request(packet: Packet, addr: SocketAddr, socket: &UdpSocket, state: &mut State) {
+    let mut answers = Vec::new();
+
+    for question in &packet.questions {
+        let answer = match state.resolve(question).await {
+            Ok(answer) => answer,
+            Err(err) => {
+                tracing::error!("failed to resolve query: {:?}", err);
+
+                let response = Packet {
+                    transaction_id: packet.transaction_id,
+                    qr: Qr::Response,
+                    opcode: packet.opcode,
+                    authoritative_answer: false,
+                    recursion_desired: packet.recursion_desired,
+                    recursion_available: true,
+                    response_code: ResponseCode::ServerFailure,
+                    truncated: false,
+                    questions: Vec::new(),
+                    answers: Vec::new(),
+                    additional: Vec::new(),
+                    authority: Vec::new(),
+                };
+
+                let mut buf = Vec::new();
+                response.encode(&mut buf);
+
+                socket.send_to(&buf, addr).await.unwrap();
+                continue;
+            }
+        };
+        answers.push(ResourceRecord {
+            name: question.name.clone(),
+            r#type: answer.r#type,
+            class: answer.class,
+            ttl: answer.ttl().as_secs() as u32,
+            rddata: answer.data.clone(),
+        });
+    }
+
+    let response = Packet {
+        transaction_id: packet.transaction_id,
+        qr: Qr::Response,
+        opcode: OpCode::Query,
+        authoritative_answer: false,
+        recursion_desired: packet.recursion_desired,
+        recursion_available: true,
+        truncated: false,
+        response_code: ResponseCode::Ok,
+        questions: packet.questions,
+        answers,
+        additional: Vec::new(),
+        authority: Vec::new(),
+    };
+
+    let mut buf = Vec::new();
+    response.encode(&mut buf);
+
+    socket.send_to(&buf, addr).await.unwrap();
 }
 
 #[derive(Clone, Debug, Default)]

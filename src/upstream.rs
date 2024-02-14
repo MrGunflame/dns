@@ -1,14 +1,13 @@
+pub mod https;
+pub mod udp;
+
+use std::collections::HashMap;
 use std::io;
-use std::net::{Ipv4Addr, Ipv6Addr, SocketAddr, SocketAddrV4, SocketAddrV6};
-use std::time::Duration;
 
-use tokio::net::UdpSocket;
+use crate::{DecodeError, Fqdn, Question, ResourceRecord};
 
-use crate::{DecodeError, OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
-
-pub struct Resolvers {
-    pub resolvers: Vec<UpstreamResolver>,
-}
+use self::https::HttpsResolver;
+use self::udp::UdpResolver;
 
 #[derive(Debug)]
 pub enum ResolverError {
@@ -16,70 +15,79 @@ pub enum ResolverError {
     Timeout,
     Decode(DecodeError),
     NoAnswer,
+    Http(reqwest::Error),
 }
 
-impl Resolvers {
+#[derive(Debug)]
+pub enum Resolver {
+    Udp(UdpResolver),
+    Https(HttpsResolver),
+}
+
+impl Resolver {
     pub async fn resolve(&self, question: &Question) -> Result<ResourceRecord, ResolverError> {
-        let resolver = self.resolvers.first().unwrap();
-        let addr = *resolver.addrs.first().unwrap();
-
-        let local_addr = match addr {
-            SocketAddr::V4(_) => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
-            SocketAddr::V6(_) => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
-        };
-
-        let socket = UdpSocket::bind(local_addr)
-            .await
-            .map_err(ResolverError::Io)?;
-        socket.connect(addr).await.map_err(ResolverError::Io)?;
-
-        let packet = Packet {
-            transaction_id: rand::random(),
-            qr: Qr::Request,
-            opcode: OpCode::Query,
-            authoritative_answer: false,
-            truncated: false,
-            recursion_desired: true,
-            recursion_available: false,
-            response_code: ResponseCode::Ok,
-            questions: vec![question.clone()],
-            answers: vec![],
-            additional: vec![],
-            authority: vec![],
-        };
-
-        let mut buf = Vec::new();
-        packet.encode(&mut buf);
-
-        socket.send(&buf).await.map_err(ResolverError::Io)?;
-
-        let mut buf = vec![0; 1500];
-        let len = tokio::select! {
-            len = socket.recv(&mut buf) => {
-                let len = len.map_err(ResolverError::Io)?;
-                len
-            }
-            _ = tokio::time::sleep(resolver.timeout) => return Err(ResolverError::Timeout),
-        };
-
-        buf.truncate(len);
-
-        let packet = Packet::decode(&buf[..]).map_err(ResolverError::Decode)?;
-
-        for answer in packet.answers {
-            if answer.name == question.name
-                && answer.r#type == question.qtype
-                && answer.class == question.qclass
-            {
-                return Ok(answer);
-            }
+        match self {
+            Self::Udp(resolver) => resolver.resolve(question).await,
+            Self::Https(resolver) => resolver.resolve(question).await,
         }
-
-        Err(ResolverError::NoAnswer)
     }
 }
 
-pub struct UpstreamResolver {
-    pub addrs: Vec<SocketAddr>,
-    pub timeout: Duration,
+#[derive(Debug, Default)]
+pub struct Zones {
+    resolvers: HashMap<String, Vec<Resolver>>,
+}
+
+impl Zones {
+    pub fn lookup(&self, fqdn: &Fqdn) -> Option<&[Resolver]> {
+        let mut zone = fqdn.0.as_str();
+
+        loop {
+            if let Some(resolvers) = self.resolvers.get(zone) {
+                return Some(resolvers);
+            }
+
+            if let Some((_, suffix)) = zone.split_once('.') {
+                zone = suffix;
+                if zone.is_empty() {
+                    zone = ".";
+                }
+            } else {
+                return None;
+            }
+        }
+    }
+
+    pub fn insert(&mut self, fqdn: Fqdn, resolver: Resolver) {
+        self.resolvers.entry(fqdn.0).or_default().push(resolver);
+    }
+
+    pub fn clear(&mut self) {
+        self.resolvers.clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::Fqdn;
+
+    use super::Zones;
+
+    #[test]
+    fn zones_lookup_exact() {
+        let mut zones = Zones::default();
+        zones
+            .resolvers
+            .insert("example.com.".to_owned(), Vec::new());
+
+        assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
+    }
+
+    #[test]
+    fn zones_lookup_root() {
+        let mut zones = Zones::default();
+        zones.resolvers.insert(".".to_owned(), Vec::new());
+
+        assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
+    }
 }
