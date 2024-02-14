@@ -10,7 +10,7 @@ use super::ResolverError;
 #[derive(Debug)]
 pub struct UdpResolver {
     addr: SocketAddr,
-    timeout: Duration,
+    pub timeout: Duration,
 }
 
 impl UdpResolver {
@@ -50,14 +50,7 @@ impl UdpResolver {
         socket.send(&buf).await.map_err(ResolverError::Io)?;
 
         let mut buf = vec![0; 1500];
-        let len = tokio::select! {
-            len = socket.recv(&mut buf) => {
-                let len = len.map_err(ResolverError::Io)?;
-                len
-            }
-            _ = tokio::time::sleep(self.timeout) => return Err(ResolverError::Timeout),
-        };
-
+        let len = socket.recv(&mut buf).await.map_err(ResolverError::Io)?;
         buf.truncate(len);
 
         let packet = Packet::decode(&buf[..]).map_err(ResolverError::Decode)?;

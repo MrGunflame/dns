@@ -55,7 +55,10 @@ impl State {
                         Duration::from_secs(conf.timeout),
                     )),
                     crate::config::ResolverConfig::Https(conf) => {
-                        Resolver::Https(HttpsResolver::new(Url::parse(&conf.url).unwrap()))
+                        Resolver::Https(HttpsResolver::new(
+                            Url::parse(&conf.url).unwrap(),
+                            Duration::from_secs(conf.timeout),
+                        ))
                     }
                 };
 

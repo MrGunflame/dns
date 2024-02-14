@@ -1,3 +1,5 @@
+use std::time::Duration;
+
 use reqwest::header::HeaderValue;
 use reqwest::{Body, Client, ClientBuilder, Method, Request, Url};
 
@@ -9,13 +11,18 @@ use super::ResolverError;
 pub struct HttpsResolver {
     client: Client,
     url: Url,
+    pub timeout: Duration,
 }
 
 impl HttpsResolver {
-    pub fn new(url: Url) -> Self {
+    pub fn new(url: Url, timeout: Duration) -> Self {
         let client = ClientBuilder::new().use_rustls_tls().build().unwrap();
 
-        Self { client, url }
+        Self {
+            client,
+            url,
+            timeout,
+        }
     }
 
     pub async fn resolve(&self, question: &Question) -> Result<ResourceRecord, ResolverError> {

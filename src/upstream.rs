@@ -3,6 +3,9 @@ pub mod udp;
 
 use std::collections::HashMap;
 use std::io;
+use std::time::Duration;
+
+use futures::{select_biased, FutureExt};
 
 use crate::{DecodeError, Fqdn, Question, ResourceRecord};
 
@@ -26,9 +29,25 @@ pub enum Resolver {
 
 impl Resolver {
     pub async fn resolve(&self, question: &Question) -> Result<ResourceRecord, ResolverError> {
+        let timeout = tokio::time::sleep(self.timeout()).fuse();
+        futures::pin_mut!(timeout);
+
         match self {
-            Self::Udp(resolver) => resolver.resolve(question).await,
-            Self::Https(resolver) => resolver.resolve(question).await,
+            Self::Udp(resolver) => select_biased! {
+                res = resolver.resolve(question).fuse() => res,
+                _ = timeout => Err(ResolverError::Timeout),
+            },
+            Self::Https(resolver) => select_biased! {
+                res = resolver.resolve(question).fuse() => res,
+                _ = timeout => Err(ResolverError::Timeout),
+            },
+        }
+    }
+
+    fn timeout(&self) -> Duration {
+        match self {
+            Self::Udp(resolver) => resolver.timeout,
+            Self::Https(resolver) => resolver.timeout,
         }
     }
 }
