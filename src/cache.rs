@@ -1,6 +1,7 @@
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 
-use crate::{Class, Fqdn, Question, Type};
+use crate::{Class, Question, Type};
 
 #[derive(Clone, Debug, Default)]
 pub struct Cache {
@@ -22,5 +23,11 @@ pub struct Resource {
     pub r#type: Type,
     pub class: Class,
     pub data: Vec<u8>,
-    pub ttl: u32,
+    pub valid_until: Instant,
+}
+
+impl Resource {
+    pub fn ttl(&self) -> Duration {
+        self.valid_until - Instant::now()
+    }
 }

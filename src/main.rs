@@ -1,30 +1,30 @@
 mod cache;
+mod resolve;
+mod upstream;
 
 use std::collections::HashMap;
+use std::time::{Duration, Instant};
 use std::vec;
 
 use bytes::{Buf, BufMut};
 use cache::{Cache, Resource};
+use resolve::ResolverQueue;
 use tokio::net::UdpSocket;
+use upstream::{Resolvers, UpstreamResolver};
 
 #[tokio::main]
 async fn main() {
     let socket = UdpSocket::bind("0.0.0.0:5353").await.unwrap();
 
-    let mut cache = Cache::default();
-    cache.insert(
-        Question {
-            name: Fqdn("example.com.".to_owned()),
-            qtype: Type::A,
-            qclass: Class::In,
+    let mut state = ResolverQueue {
+        cache: Cache::default(),
+        upstream: Resolvers {
+            resolvers: vec![UpstreamResolver {
+                addrs: vec!["10.1.0.1:53".parse().unwrap()],
+                timeout: Duration::from_secs(3),
+            }],
         },
-        Resource {
-            r#type: Type::A,
-            class: Class::In,
-            data: vec![127, 0, 0, 01],
-            ttl: 300,
-        },
-    );
+    };
 
     loop {
         let mut buf = vec![0; 1500];
@@ -33,20 +33,18 @@ async fn main() {
         println!("{:?}", addr);
 
         let packet = Packet::decode(&buf[..]).unwrap();
-        dbg!(&packet);
 
         let mut answers = Vec::new();
 
         for question in &packet.questions {
-            if let Some(resource) = cache.get(&question) {
-                answers.push(ResourceRecord {
-                    name: question.name.clone(),
-                    r#type: resource.r#type,
-                    class: resource.class,
-                    ttl: resource.ttl,
-                    rddata: resource.data.clone(),
-                });
-            }
+            let answer = state.resolve(question).await.unwrap();
+            answers.push(ResourceRecord {
+                name: question.name.clone(),
+                r#type: answer.r#type,
+                class: answer.class,
+                ttl: answer.ttl().as_secs() as u32,
+                rddata: answer.data.clone(),
+            });
         }
 
         let response = Packet {
@@ -402,6 +400,8 @@ impl Fqdn {
     where
         B: Buf,
     {
+        let offset_start = *offset;
+
         if buf.remaining() < 1 {
             return Err(DecodeError::Eof);
         }
@@ -425,7 +425,7 @@ impl Fqdn {
 
         loop {
             if len == 0 {
-                let mut label_offset = 0;
+                let mut label_offset = offset_start;
                 for index in 0..fqdn_labels.len() {
                     let label = fqdn_labels[index..].join("");
                     labels.insert(label_offset, label);
