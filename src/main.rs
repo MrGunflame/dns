@@ -1,5 +1,6 @@
 mod cache;
 
+use std::collections::HashMap;
 use std::vec;
 
 use bytes::{Buf, BufMut};
@@ -248,9 +249,27 @@ impl Packet {
         let rcode = ResponseCode::from_u16(flags & 0b0000_0000_0000_1111)
             .ok_or(DecodeError::InvalidResponseCode)?;
 
+        let mut labels = HashMap::new();
+        let mut offset = 12;
+
         let mut questions = Vec::new();
         for _ in 0..qdcount {
-            questions.push(Question::decode(&mut buf)?);
+            questions.push(Question::decode(&mut buf, &mut offset, &mut labels)?);
+        }
+
+        let mut answers = Vec::new();
+        for _ in 0..ancount {
+            answers.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
+        }
+
+        let mut authority = Vec::new();
+        for _ in 0..nscount {
+            authority.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
+        }
+
+        let mut additional = Vec::new();
+        for _ in 0..arcount {
+            additional.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
         }
 
         Ok(Self {
@@ -263,9 +282,9 @@ impl Packet {
             recursion_available: ra,
             response_code: rcode,
             questions,
-            answers: Vec::new(),
-            additional: Vec::new(),
-            authority: Vec::new(),
+            answers,
+            additional,
+            authority,
         })
     }
 
@@ -334,13 +353,18 @@ pub struct Question {
 }
 
 impl Question {
-    fn decode<B>(mut buf: B) -> Result<Self, DecodeError>
+    fn decode<B>(
+        mut buf: B,
+        offset: &mut u16,
+        labels: &mut HashMap<u16, String>,
+    ) -> Result<Self, DecodeError>
     where
         B: Buf,
     {
-        let name = Fqdn::decode(&mut buf)?;
+        let name = Fqdn::decode(&mut buf, offset, labels)?;
         let qtype = Type::from_u16(buf.get_u16()).unwrap();
         let qclass = Class::from_u16(buf.get_u16()).unwrap();
+        *offset += 4;
         Ok(Self {
             name,
             qclass,
@@ -362,27 +386,69 @@ impl Question {
 pub struct Fqdn(String);
 
 impl Fqdn {
-    fn decode<B>(mut buf: B) -> Result<Self, DecodeError>
+    fn decode<B>(
+        mut buf: B,
+        offset: &mut u16,
+        labels: &mut HashMap<u16, String>,
+    ) -> Result<Self, DecodeError>
     where
         B: Buf,
     {
-        let mut fqdn = String::new();
-        loop {
-            let len = buf.get_u8();
-            if len & 0b1100_0000 != 0 {
-                todo!()
+        if buf.remaining() < 1 {
+            return Err(DecodeError::Eof);
+        }
+
+        // Domain name compression scheme
+        let mut len = buf.get_u8();
+        *offset += 1;
+        if len & 0b1100_0000 != 0 {
+            if buf.remaining() < 1 {
+                return Err(DecodeError::Eof);
             }
 
+            let pointer = (len as u16 & 0b0011_1111) << 8 | (buf.get_u8() as u16);
+            *offset += 1;
+            let label = labels.get(&pointer).ok_or(DecodeError::BadPointer)?;
+
+            return Ok(Self(label.clone()));
+        }
+
+        let mut fqdn_labels: Vec<String> = Vec::new();
+
+        loop {
             if len == 0 {
+                let mut label_offset = 0;
+                for index in 0..fqdn_labels.len() {
+                    let label = fqdn_labels[index..].join("");
+                    labels.insert(label_offset, label);
+                    label_offset += fqdn_labels[index].len() as u16;
+                }
+
+                let fqdn = fqdn_labels.join("");
+
                 return Ok(Self(fqdn));
+            }
+
+            let mut label = String::new();
+
+            if buf.remaining() < len.into() {
+                return Err(DecodeError::Eof);
             }
 
             for _ in 0..len {
                 let v = buf.get_u8();
-                fqdn.push_str(std::str::from_utf8(&[v]).unwrap());
+                label.push_str(std::str::from_utf8(&[v]).unwrap());
             }
+            *offset += len as u16;
 
-            fqdn.push_str(".");
+            label.push_str(".");
+            fqdn_labels.push(label);
+
+            if buf.remaining() < 1 {
+                return Err(DecodeError::Eof);
+            }
+            len = buf.get_u8();
+            *offset += 1;
         }
     }
 
@@ -487,15 +553,20 @@ pub struct ResourceRecord {
 }
 
 impl ResourceRecord {
-    fn decode<B>(mut buf: B) -> Result<Self, DecodeError>
+    fn decode<B>(
+        mut buf: B,
+        offset: &mut u16,
+        labels: &mut HashMap<u16, String>,
+    ) -> Result<Self, DecodeError>
     where
         B: Buf,
     {
-        let name = Fqdn::decode(&mut buf)?;
+        let name = Fqdn::decode(&mut buf, offset, labels)?;
         let r#type = Type::from_u16(buf.get_u16()).unwrap();
         let class = Class::from_u16(buf.get_u16()).unwrap();
         let ttl = buf.get_u32();
         let rdlength = buf.get_u16();
+        *offset += 10 + rdlength;
 
         let mut rddata = Vec::new();
         for _ in 0..rdlength {
@@ -549,4 +620,40 @@ pub enum DecodeError {
     Eof,
     InvalidOpCode,
     InvalidResponseCode,
+    BadPointer,
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashMap;
+
+    use crate::Fqdn;
+
+    #[test]
+    fn fqdn_decode_basic() {
+        let input = [
+            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
+        ];
+        let mut offset = 0;
+        let mut labels = HashMap::new();
+
+        let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
+        assert_eq!(fqdn.0, "example.com.");
+        assert_eq!(labels.len(), 2);
+        assert_eq!(labels.get(&0).unwrap(), "example.com.");
+        assert_eq!(labels.get(&8).unwrap(), "com.");
+    }
+
+    #[test]
+    fn fqdn_decode_compressed() {
+        let input = [0b1100_0000, 0b0000_1000];
+
+        let mut offset = 0;
+        let mut labels = HashMap::new();
+        labels.insert(0, "example.com.".to_owned());
+        labels.insert(8, "com.".to_owned());
+
+        let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
+        assert_eq!(fqdn.0, "com.");
+    }
 }
