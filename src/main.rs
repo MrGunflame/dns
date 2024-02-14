@@ -202,6 +202,10 @@ impl Packet {
     where
         B: Buf,
     {
+        if buf.remaining() < 12 {
+            return Err(DecodeError::Eof);
+        }
+
         let transaction_id = buf.get_u16();
         let flags = buf.get_u16();
         let qdcount = buf.get_u16();
@@ -362,8 +366,12 @@ impl Question {
         B: Buf,
     {
         let name = Fqdn::decode(&mut buf, offset, labels)?;
-        let qtype = Type::from_u16(buf.get_u16()).unwrap();
-        let qclass = Class::from_u16(buf.get_u16()).unwrap();
+
+        if buf.remaining() < 4 {
+            return Err(DecodeError::Eof);
+        }
+        let qtype = Type::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidType)?;
+        let qclass = Class::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidClass)?;
         *offset += 4;
         Ok(Self {
             name,
@@ -487,6 +495,8 @@ pub enum Type {
     MINFO,
     MX,
     TXT,
+    /// EDNS
+    OPT,
 }
 
 macro_rules! enum_as_int {
@@ -531,6 +541,7 @@ enum_as_int! {
     14 => MINFO,
     15 => MX,
     16 => TXT,
+    41 => OPT,
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
@@ -562,13 +573,31 @@ impl ResourceRecord {
         B: Buf,
     {
         let name = Fqdn::decode(&mut buf, offset, labels)?;
-        let r#type = Type::from_u16(buf.get_u16()).unwrap();
-        let class = Class::from_u16(buf.get_u16()).unwrap();
+
+        if buf.remaining() < 10 {
+            return Err(DecodeError::Eof);
+        }
+        let r#type = Type::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidType)?;
+        // Skip OPT for now
+        if r#type == Type::OPT {
+            return Ok(Self {
+                name,
+                r#type,
+                ttl: 0,
+                class: Class::In,
+                rddata: vec![],
+            });
+        }
+
+        let class = Class::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidClass)?;
         let ttl = buf.get_u32();
         let rdlength = buf.get_u16();
         *offset += 10 + rdlength;
 
         let mut rddata = Vec::new();
+        if buf.remaining() < rdlength.into() {
+            return Err(DecodeError::Eof);
+        }
         for _ in 0..rdlength {
             rddata.push(buf.get_u8());
         }
@@ -620,6 +649,8 @@ pub enum DecodeError {
     Eof,
     InvalidOpCode,
     InvalidResponseCode,
+    InvalidType,
+    InvalidClass,
     BadPointer,
 }
 
