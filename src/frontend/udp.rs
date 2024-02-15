@@ -31,7 +31,7 @@ impl UdpServer {
                 }
             };
 
-            handle_request(packet, addr, &self.socket, state).await;
+            handle_request(packet, addr, &self.socket, &state).await;
         }
     }
 }

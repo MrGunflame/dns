@@ -1,6 +1,8 @@
 mod cache;
 mod config;
 mod frontend;
+mod http;
+mod metrics;
 mod state;
 mod upstream;
 
@@ -11,7 +13,6 @@ use crate::frontend::udp::UdpServer;
 use bytes::{Buf, BufMut};
 use config::Config;
 use state::State;
-use upstream::Zones;
 
 #[tokio::main]
 async fn main() {
@@ -19,17 +20,23 @@ async fn main() {
 
     let config = Config::from_file("./config.json");
 
-    let mut state = State {
-        cache: Default::default(),
-        config,
-        zones: Zones::default(),
-    };
-    state.generate_zones();
+    let state = State::new(config);
+    let state: &'static State = Box::leak(Box::new(state));
 
-    let server = UdpServer::new().await;
-    tokio::select! {
-        _ = server.poll(&state) => (),
-        _ = state.cache.remove_expiring() => (),
+    let mut handles = Vec::new();
+    handles.push(tokio::task::spawn(async move {
+        let server = UdpServer::new().await;
+        server.poll(&state).await;
+    }));
+    handles.push(tokio::task::spawn(async move {
+        state.cache.remove_expiring().await;
+    }));
+    handles.push(tokio::task::spawn(async move {
+        http::run(state).await;
+    }));
+
+    for handle in handles {
+        let _ = handle.await;
     }
 }
 

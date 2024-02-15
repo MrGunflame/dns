@@ -26,18 +26,30 @@ impl Cache {
         self.wakeup.notify_one();
     }
 
+    pub fn remove_first(&self) -> Option<Resource> {
+        if let Some((_, question)) = self.expiration.write().pop_first() {
+            self.entries.write().remove(&question)
+        } else {
+            None
+        }
+    }
+
+    pub fn next_expiration(&self) -> Option<Instant> {
+        let expr = self.expiration.read();
+        expr.first_key_value().map(|(v, _)| *v)
+    }
+
     pub async fn remove_expiring(&self) -> ! {
         loop {
-            let expr = self.expiration.read();
-            let Some((timestamp, question)) = expr.first_key_value().map(|(a, b)| (*a, b.clone()))
-            else {
-                drop(expr);
-
+            let res = {
+                let expr = self.expiration.read();
+                expr.first_key_value().map(|(a, b)| (*a, b.clone()))
+            };
+            let Some((timestamp, question)) = res else {
                 // Wait until a entry is available.
                 self.wakeup.notified().await;
                 continue;
             };
-            drop(expr);
 
             tokio::time::sleep_until((timestamp).into()).await;
             self.entries.write().remove(&question);
