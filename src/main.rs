@@ -1,17 +1,16 @@
 mod cache;
 mod config;
+mod frontend;
 mod state;
 mod upstream;
 
 use std::collections::HashMap;
-use std::net::SocketAddr;
 use std::vec;
 
+use crate::frontend::udp::UdpServer;
 use bytes::{Buf, BufMut};
-use cache::Cache;
 use config::Config;
 use state::State;
-use tokio::net::UdpSocket;
 use upstream::Zones;
 
 #[tokio::main]
@@ -21,90 +20,17 @@ async fn main() {
     let config = Config::from_file("./config.json");
 
     let mut state = State {
-        cache: Cache::default(),
+        cache: Default::default(),
         config,
         zones: Zones::default(),
     };
     state.generate_zones();
 
-    let socket = UdpSocket::bind("0.0.0.0:5353").await.unwrap();
-
-    loop {
-        let mut buf = vec![0; 1500];
-        let (len, addr) = tokio::select! {
-            res = socket.recv_from(&mut buf) => {
-                res.unwrap()
-            }
-            _ = state.cache.remove_expiring() => unreachable!(),
-        };
-
-        buf.truncate(len);
-        tracing::info!("request from {:?}", addr);
-
-        let packet = Packet::decode(&buf[..]).unwrap();
-        handle_request(packet, addr, &socket, &mut state).await;
+    let server = UdpServer::new().await;
+    tokio::select! {
+        _ = server.poll(&state) => (),
+        _ = state.cache.remove_expiring() => (),
     }
-}
-
-async fn handle_request(packet: Packet, addr: SocketAddr, socket: &UdpSocket, state: &mut State) {
-    let mut answers = Vec::new();
-
-    for question in &packet.questions {
-        let answer = match state.resolve(question).await {
-            Ok(answer) => answer,
-            Err(err) => {
-                tracing::error!("failed to resolve query: {:?}", err);
-
-                let response = Packet {
-                    transaction_id: packet.transaction_id,
-                    qr: Qr::Response,
-                    opcode: packet.opcode,
-                    authoritative_answer: false,
-                    recursion_desired: packet.recursion_desired,
-                    recursion_available: true,
-                    response_code: ResponseCode::ServerFailure,
-                    truncated: false,
-                    questions: Vec::new(),
-                    answers: Vec::new(),
-                    additional: Vec::new(),
-                    authority: Vec::new(),
-                };
-
-                let mut buf = Vec::new();
-                response.encode(&mut buf);
-
-                socket.send_to(&buf, addr).await.unwrap();
-                continue;
-            }
-        };
-        answers.push(ResourceRecord {
-            name: question.name.clone(),
-            r#type: answer.r#type,
-            class: answer.class,
-            ttl: answer.ttl().as_secs() as u32,
-            rddata: answer.data.clone(),
-        });
-    }
-
-    let response = Packet {
-        transaction_id: packet.transaction_id,
-        qr: Qr::Response,
-        opcode: OpCode::Query,
-        authoritative_answer: false,
-        recursion_desired: packet.recursion_desired,
-        recursion_available: true,
-        truncated: false,
-        response_code: ResponseCode::Ok,
-        questions: packet.questions,
-        answers,
-        additional: Vec::new(),
-        authority: Vec::new(),
-    };
-
-    let mut buf = Vec::new();
-    response.encode(&mut buf);
-
-    socket.send_to(&buf, addr).await.unwrap();
 }
 
 #[derive(Clone, Debug, Default)]

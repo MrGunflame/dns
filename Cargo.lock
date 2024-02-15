@@ -828,6 +828,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "futures",
+ "parking_lot",
  "pretty_env_logger",
  "rand",
  "reqwest",

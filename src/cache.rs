@@ -1,36 +1,47 @@
 use std::collections::{BTreeMap, HashMap};
-use std::task::Poll;
 use std::time::{Duration, Instant};
+
+use parking_lot::RwLock;
+use tokio::sync::Notify;
 
 use crate::{Class, Question, Type};
 
-#[derive(Clone, Debug, Default)]
+#[derive(Debug, Default)]
 pub struct Cache {
-    entries: HashMap<Question, Resource>,
-    expiration: BTreeMap<Instant, Question>,
+    entries: RwLock<HashMap<Question, Resource>>,
+    expiration: RwLock<BTreeMap<Instant, Question>>,
+    wakeup: Notify,
 }
 
 impl Cache {
     pub fn get(&self, question: &Question) -> Option<Resource> {
-        self.entries.get(question).cloned()
+        self.entries.read().get(question).cloned()
     }
 
-    pub fn insert(&mut self, question: Question, resource: Resource) {
+    pub fn insert(&self, question: Question, resource: Resource) {
         self.expiration
+            .write()
             .insert(resource.valid_until, question.clone());
-        self.entries.insert(question, resource);
+        self.entries.write().insert(question, resource);
+        self.wakeup.notify_one();
     }
 
-    pub async fn remove_expiring(&mut self) -> ! {
+    pub async fn remove_expiring(&self) -> ! {
         loop {
-            let Some((timestamp, question)) = self.expiration.first_key_value() else {
-                futures::future::poll_fn(|_| Poll::<()>::Pending).await;
-                unreachable!()
-            };
+            let expr = self.expiration.read();
+            let Some((timestamp, question)) = expr.first_key_value().map(|(a, b)| (*a, b.clone()))
+            else {
+                drop(expr);
 
-            tokio::time::sleep_until((*timestamp).into()).await;
-            self.entries.remove(&question);
-            self.expiration.pop_first();
+                // Wait until a entry is available.
+                self.wakeup.notified().await;
+                continue;
+            };
+            drop(expr);
+
+            tokio::time::sleep_until((timestamp).into()).await;
+            self.entries.write().remove(&question);
+            self.expiration.write().pop_first();
         }
     }
 }

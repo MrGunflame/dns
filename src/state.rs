@@ -16,7 +16,7 @@ pub struct State {
 }
 
 impl State {
-    pub async fn resolve(&mut self, question: &Question) -> Result<Resource, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Resource, ResolverError> {
         if let Some(answer) = self.cache.get(&question) {
             tracing::info!("using cached result (valid for {:?})", answer.ttl());
             return Ok(answer.clone());
