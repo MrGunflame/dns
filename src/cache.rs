@@ -38,24 +38,6 @@ impl Cache {
         let expr = self.expiration.read();
         expr.first_key_value().map(|(v, _)| *v)
     }
-
-    pub async fn remove_expiring(&self) -> ! {
-        loop {
-            let res = {
-                let expr = self.expiration.read();
-                expr.first_key_value().map(|(a, b)| (*a, b.clone()))
-            };
-            let Some((timestamp, question)) = res else {
-                // Wait until a entry is available.
-                self.wakeup.notified().await;
-                continue;
-            };
-
-            tokio::time::sleep_until((timestamp).into()).await;
-            self.entries.write().remove(&question);
-            self.expiration.write().pop_first();
-        }
-    }
 }
 
 #[derive(Clone, Debug)]

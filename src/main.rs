@@ -29,7 +29,7 @@ async fn main() {
         server.poll(&state).await;
     }));
     handles.push(tokio::task::spawn(async move {
-        state.cache.remove_expiring().await;
+        state.cleanup().await;
     }));
     handles.push(tokio::task::spawn(async move {
         http::run(state).await;
