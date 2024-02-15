@@ -443,6 +443,7 @@ impl Fqdn {
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Type {
+    // RFC 1035
     A,
     NS,
     MD,
@@ -459,6 +460,80 @@ pub enum Type {
     MINFO,
     MX,
     TXT,
+    // RFC 3596
+    AAAA,
+    // RFC 1183
+    AFSDB,
+    // RFC 3123
+    APL,
+    // RFC 6844
+    CAA,
+    // RFC 7344
+    CDNSKEY,
+    CDS,
+    // RFC 4398
+    CERT,
+    // RFC 7477
+    CSYNC,
+    // RFC 4701
+    DHCID,
+    // RFC 4431
+    DLV,
+    // RFC 6672
+    DNAME,
+    // RFC 4034
+    DNSKEY,
+    DS,
+    // RFC 7043
+    EUI48,
+    EUI64,
+    // RFC 8005
+    HIP,
+    // RFC 9460
+    HTTPS,
+    // RFC 4025
+    IPSECKEY,
+    // RFC 2535
+    KEY,
+    // RFC 2230
+    KX,
+    // RFC 1876
+    LOC,
+    // RFC 3403
+    NAPTR,
+    // RFC 4034
+    NSEC,
+    // RFC 5155
+    NSEC3,
+    // RFC 5155
+    NSEC3PARAM,
+    // RFC 7929
+    OPENPGPKEY,
+    // RFC 4034
+    RRSIG,
+    // RFC 1183
+    RP,
+    // RFC 2535
+    SIG,
+    // RFC 8162
+    SMIMEA,
+    // RFC 2782
+    SRV,
+    // RFC 4255
+    SSHFP,
+    // RFC 9460
+    SVCB,
+    TA,
+    // RFC 2930
+    TKEY,
+    // RFC 6698
+    TLSA,
+    // RFC 2845
+    TSIG,
+    // RFC 7553
+    URI,
+    // RFC 8976
+    ZONEMD,
     /// EDNS
     OPT,
 }
@@ -505,6 +580,45 @@ enum_as_int! {
     14 => MINFO,
     15 => MX,
     16 => TXT,
+    28 => AAAA,
+    18 => AFSDB,
+    42 => APL,
+    257 => CAA,
+    60 => CDNSKEY,
+    59 => CDS,
+    37 => CERT,
+    62 => CSYNC,
+    49 => DHCID,
+    32769 => DLV,
+    39 => DNAME,
+    48 => DNSKEY,
+    43 => DS,
+    108 => EUI48,
+    109 => EUI64,
+    55 => HIP,
+    65 => HTTPS,
+    45 => IPSECKEY,
+    25 => KEY,
+    36 => KX,
+    29 => LOC,
+    35 => NAPTR,
+    47 => NSEC,
+    50 => NSEC3,
+    51 => NSEC3PARAM,
+    61 => OPENPGPKEY,
+    46 => RRSIG,
+    17 => RP,
+    24 => SIG,
+    53 => SMIMEA,
+    33 => SRV,
+    44 => SSHFP,
+    64 => SVCB,
+    32768 => TA,
+    249 => TKEY,
+    52 => TLSA,
+    250 => TSIG,
+    256 => URI,
+    63 => ZONEMD,
     41 => OPT,
 }
 
