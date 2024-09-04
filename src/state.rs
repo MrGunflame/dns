@@ -47,29 +47,35 @@ impl State {
             return Err(ResolverError::NoAnswer);
         };
 
-        let Some(resolver) = resolvers.first() else {
-            return Err(ResolverError::NoServers);
-        };
+        for resolver in resolvers {
+            tracing::debug!("trying upstream {}", resolver.addr());
+            let answer = match resolver.resolve(&question).await {
+                Ok(answer) => answer,
+                Err(err) => {
+                    tracing::error!("upstream {} failed: {:?}", resolver.addr(), err);
+                    continue;
+                }
+            };
 
-        self.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
-        tracing::info!("looking up query");
-        let answer = resolver.resolve(&question).await?;
-        let res = Resource {
-            r#type: answer.r#type,
-            class: answer.class,
-            data: answer.rddata,
-            valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
-        };
+            let res = Resource {
+                r#type: answer.r#type,
+                class: answer.class,
+                data: answer.rddata,
+                valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
+            };
 
-        if answer.ttl != 0 {
-            self.cache.insert(question.clone(), res.clone());
-            self.cache_wakeup.notify_one();
-            self.metrics
-                .cache_size
-                .fetch_add(res.data.len() as u64, Ordering::Relaxed);
+            if answer.ttl != 0 {
+                self.cache.insert(question.clone(), res.clone());
+                self.cache_wakeup.notify_one();
+                self.metrics
+                    .cache_size
+                    .fetch_add(res.data.len() as u64, Ordering::Relaxed);
+            }
+
+            return Ok(res);
         }
 
-        Ok(res)
+        Err(ResolverError::NoAnswer)
     }
 
     pub fn generate_zones(&mut self) {

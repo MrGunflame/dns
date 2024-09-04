@@ -9,7 +9,7 @@ use super::ResolverError;
 
 #[derive(Debug)]
 pub struct UdpResolver {
-    addr: SocketAddr,
+    pub addr: SocketAddr,
     pub timeout: Duration,
 }
 

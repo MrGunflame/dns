@@ -19,7 +19,6 @@ pub enum ResolverError {
     Decode(DecodeError),
     NoAnswer,
     Http(reqwest::Error),
-    NoServers,
 }
 
 #[derive(Debug)]
@@ -42,6 +41,13 @@ impl Resolver {
                 res = resolver.resolve(question).fuse() => res,
                 _ = timeout => Err(ResolverError::Timeout),
             },
+        }
+    }
+
+    pub fn addr(&self) -> String {
+        match self {
+            Self::Udp(resolver) => resolver.addr.to_string(),
+            Self::Https(resolver) => resolver.url.to_string(),
         }
     }
 

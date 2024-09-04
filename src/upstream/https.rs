@@ -10,7 +10,7 @@ use super::ResolverError;
 #[derive(Debug)]
 pub struct HttpsResolver {
     client: Client,
-    url: Url,
+    pub url: Url,
     pub timeout: Duration,
 }
 
