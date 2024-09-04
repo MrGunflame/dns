@@ -3,7 +3,7 @@ use std::time::Duration;
 use reqwest::header::HeaderValue;
 use reqwest::{Body, Client, ClientBuilder, Method, Request, Url};
 
-use crate::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
+use crate::proto::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
 
 use super::ResolverError;
 

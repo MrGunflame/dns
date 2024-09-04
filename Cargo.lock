@@ -795,6 +795,25 @@ dependencies = [
 ]
 
 [[package]]
+name = "rdns"
+version = "0.1.0"
+dependencies = [
+ "bytes",
+ "futures",
+ "http-body-util",
+ "hyper 1.1.0",
+ "hyper-util",
+ "parking_lot",
+ "pretty_env_logger",
+ "rand",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "tokio",
+ "tracing",
+]
+
+[[package]]
 name = "redox_syscall"
 version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -888,25 +907,6 @@ dependencies = [
  "spin",
  "untrusted",
  "windows-sys 0.48.0",
-]
-
-[[package]]
-name = "rust-dns"
-version = "0.1.0"
-dependencies = [
- "bytes",
- "futures",
- "http-body-util",
- "hyper 1.1.0",
- "hyper-util",
- "parking_lot",
- "pretty_env_logger",
- "rand",
- "reqwest",
- "serde",
- "serde_json",
- "tokio",
- "tracing",
 ]
 
 [[package]]

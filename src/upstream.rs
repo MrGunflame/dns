@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use futures::{select_biased, FutureExt};
 
-use crate::{DecodeError, Fqdn, Question, ResourceRecord};
+use crate::proto::{DecodeError, Fqdn, Question, ResourceRecord};
 
 use self::https::HttpsResolver;
 use self::udp::UdpResolver;
@@ -19,6 +19,7 @@ pub enum ResolverError {
     Decode(DecodeError),
     NoAnswer,
     Http(reqwest::Error),
+    NoServers,
 }
 
 #[derive(Debug)]
@@ -59,7 +60,7 @@ pub struct Zones {
 
 impl Zones {
     pub fn lookup(&self, fqdn: &Fqdn) -> Option<&[Resolver]> {
-        let mut zone = fqdn.0.as_str();
+        let mut zone = fqdn.as_str();
 
         loop {
             if let Some(resolvers) = self.resolvers.get(zone) {
@@ -88,7 +89,7 @@ impl Zones {
 
 #[cfg(test)]
 mod tests {
-    use crate::Fqdn;
+    use crate::proto::Fqdn;
 
     use super::Zones;
 

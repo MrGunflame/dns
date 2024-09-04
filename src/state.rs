@@ -8,10 +8,10 @@ use tokio::sync::Notify;
 use crate::cache::{Cache, Resource};
 use crate::config::Config;
 use crate::metrics::Metrics;
+use crate::proto::{Fqdn, Question};
 use crate::upstream::https::HttpsResolver;
 use crate::upstream::udp::UdpResolver;
 use crate::upstream::{Resolver, ResolverError, Zones};
-use crate::{Fqdn, Question};
 
 pub struct State {
     pub cache: Cache,
@@ -34,6 +34,7 @@ impl State {
         this
     }
 
+    /// Resolve a single [`Question`].
     pub async fn resolve(&self, question: &Question) -> Result<Resource, ResolverError> {
         if let Some(answer) = self.cache.get(&question) {
             self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
@@ -45,7 +46,10 @@ impl State {
             tracing::error!("no nameservers for root zone configured");
             return Err(ResolverError::NoAnswer);
         };
-        let resolver = resolvers.first().unwrap();
+
+        let Some(resolver) = resolvers.first() else {
+            return Err(ResolverError::NoServers);
+        };
 
         self.metrics.cache_misses.fetch_add(1, Ordering::Relaxed);
         tracing::info!("looking up query");
@@ -54,7 +58,7 @@ impl State {
             r#type: answer.r#type,
             class: answer.class,
             data: answer.rddata,
-            valid_until: Instant::now() + Duration::from_secs(answer.ttl as u64),
+            valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
         };
 
         if answer.ttl != 0 {
@@ -86,7 +90,8 @@ impl State {
                     }
                 };
 
-                self.zones.insert(Fqdn(zone.clone()), resolver);
+                self.zones
+                    .insert(Fqdn::new_unchecked(zone.clone()), resolver);
             }
         }
     }

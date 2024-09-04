@@ -4,7 +4,7 @@ use std::time::{Duration, Instant};
 use parking_lot::RwLock;
 use tokio::sync::Notify;
 
-use crate::{Class, Question, Type};
+use crate::proto::{Class, Question, Type};
 
 #[derive(Debug, Default)]
 pub struct Cache {

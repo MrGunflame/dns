@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::net::UdpSocket;
 
-use crate::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
+use crate::proto::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
 
 use super::ResolverError;
 
