@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use bytes::{Buf, BufMut};
+use bytes::{Buf, BufMut, Bytes};
 
 #[derive(Clone, Debug, Default)]
 pub struct Header {
@@ -617,7 +617,7 @@ pub struct ResourceRecord {
     pub r#type: Type,
     pub class: Class,
     pub ttl: u32,
-    pub rddata: Vec<u8>,
+    pub rddata: Bytes,
 }
 
 impl ResourceRecord {
@@ -642,7 +642,7 @@ impl ResourceRecord {
                 r#type,
                 ttl: 0,
                 class: Class::In,
-                rddata: vec![],
+                rddata: Bytes::new(),
             });
         }
 
@@ -664,7 +664,7 @@ impl ResourceRecord {
             r#type,
             class,
             ttl,
-            rddata,
+            rddata: Bytes::from(rddata),
         })
     }
 

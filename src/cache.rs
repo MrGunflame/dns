@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
+use bytes::Bytes;
 use parking_lot::RwLock;
 use tokio::sync::Notify;
 
@@ -44,7 +45,7 @@ impl Cache {
 pub struct Resource {
     pub r#type: Type,
     pub class: Class,
-    pub data: Vec<u8>,
+    pub data: Bytes,
     pub valid_until: Instant,
 }
 

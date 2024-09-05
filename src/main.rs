@@ -24,7 +24,9 @@ async fn main() {
     let mut handles = Vec::new();
     handles.push(tokio::task::spawn(async move {
         let server = UdpServer::new(addr).await;
-        server.poll(&state).await;
+        if let Err(err) = server.poll(&state).await {
+            tracing::error!("failed to server DNS server: {}", err)
+        }
     }));
     handles.push(tokio::task::spawn(async move {
         state.cleanup().await;

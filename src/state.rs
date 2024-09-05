@@ -38,7 +38,7 @@ impl State {
     pub async fn resolve(&self, question: &Question) -> Result<Resource, ResolverError> {
         if let Some(answer) = self.cache.get(&question) {
             self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-            tracing::info!("using cached result (valid for {:?})", answer.ttl());
+            tracing::debug!("using cached result (valid for {:?})", answer.ttl());
             return Ok(answer.clone());
         }
 
