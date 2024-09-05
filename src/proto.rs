@@ -349,6 +349,10 @@ impl Fqdn {
             return Err(DecodeError::Eof);
         }
 
+        if buf.get_u8() == 0 {
+            return Ok(Self(String::from(".")));
+        }
+
         // Domain name compression scheme
         let mut len = buf.get_u8();
         *offset += 1;
