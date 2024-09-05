@@ -1,10 +1,10 @@
 pub mod https;
 pub mod udp;
 
-use std::collections::HashMap;
 use std::io;
 use std::time::Duration;
 
+use ahash::HashMap;
 use futures::{select_biased, FutureExt};
 
 use crate::proto::{DecodeError, Fqdn, Question, ResourceRecord};
@@ -61,7 +61,7 @@ impl Resolver {
 
 #[derive(Debug, Default)]
 pub struct Zones {
-    resolvers: HashMap<String, Vec<Resolver>>,
+    resolvers: HashMap<Box<str>, Vec<Resolver>>,
 }
 
 impl Zones {
@@ -85,7 +85,10 @@ impl Zones {
     }
 
     pub fn insert(&mut self, fqdn: Fqdn, resolver: Resolver) {
-        self.resolvers.entry(fqdn.0).or_default().push(resolver);
+        self.resolvers
+            .entry(fqdn.0.into_boxed_str())
+            .or_default()
+            .push(resolver);
     }
 
     pub fn clear(&mut self) {
@@ -104,7 +107,7 @@ mod tests {
         let mut zones = Zones::default();
         zones
             .resolvers
-            .insert("example.com.".to_owned(), Vec::new());
+            .insert("example.com.".to_owned().into_boxed_str(), Vec::new());
 
         assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
     }
@@ -112,7 +115,9 @@ mod tests {
     #[test]
     fn zones_lookup_root() {
         let mut zones = Zones::default();
-        zones.resolvers.insert(".".to_owned(), Vec::new());
+        zones
+            .resolvers
+            .insert(".".to_owned().into_boxed_str(), Vec::new());
 
         assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
     }
