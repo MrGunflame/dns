@@ -17,12 +17,13 @@ async fn main() {
 
     let config = Config::from_file("./config.json");
 
+    let addr = config.bind;
     let state = State::new(config);
     let state: &'static State = Box::leak(Box::new(state));
 
     let mut handles = Vec::new();
     handles.push(tokio::task::spawn(async move {
-        let server = UdpServer::new().await;
+        let server = UdpServer::new(addr).await;
         server.poll(&state).await;
     }));
     handles.push(tokio::task::spawn(async move {

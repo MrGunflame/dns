@@ -11,8 +11,8 @@ pub struct UdpServer {
 }
 
 impl UdpServer {
-    pub async fn new() -> Self {
-        let socket = UdpSocket::bind("[::]:5353").await.unwrap();
+    pub async fn new(addr: SocketAddr) -> Self {
+        let socket = UdpSocket::bind(addr).await.unwrap();
         Self { socket }
     }
 
