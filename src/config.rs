@@ -8,6 +8,7 @@ use serde::{Deserialize, Serialize};
 pub struct Config {
     pub bind: SocketAddr,
     pub zones: HashMap<String, Vec<ResolverConfig>>,
+    pub http: Http,
 }
 
 impl Config {
@@ -36,4 +37,10 @@ pub struct UdpResolver {
 pub struct HttpResolver {
     pub url: String,
     pub timeout: u64,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Http {
+    pub enabled: bool,
+    pub bind: SocketAddr,
 }

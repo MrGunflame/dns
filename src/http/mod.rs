@@ -12,10 +12,11 @@ use hyper::{Request, Response, StatusCode};
 use hyper_util::rt::tokio::TokioIo;
 use tokio::net::TcpListener;
 
+use crate::config::Http;
 use crate::state::State;
 
-pub async fn run(state: &'static State) {
-    let listener = TcpListener::bind("[::]:8080").await.unwrap();
+pub async fn run(http: Http, state: &'static State) {
+    let listener = TcpListener::bind(http.bind).await.unwrap();
 
     loop {
         let (stream, _) = listener.accept().await.unwrap();

@@ -18,6 +18,7 @@ async fn main() {
     let config = Config::from_file("./config.json");
 
     let addr = config.bind;
+    let http = config.http.clone();
     let state = State::new(config);
     let state: &'static State = Box::leak(Box::new(state));
 
@@ -31,9 +32,12 @@ async fn main() {
     handles.push(tokio::task::spawn(async move {
         state.cleanup().await;
     }));
-    handles.push(tokio::task::spawn(async move {
-        http::run(state).await;
-    }));
+
+    if http.enabled {
+        handles.push(tokio::task::spawn(async move {
+            http::run(http, state).await;
+        }));
+    }
 
     for handle in handles {
         let _ = handle.await;
