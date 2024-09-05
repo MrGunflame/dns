@@ -349,10 +349,6 @@ impl Fqdn {
             return Err(DecodeError::Eof);
         }
 
-        if buf.get_u8() == 0 {
-            return Ok(Self(String::from(".")));
-        }
-
         // Domain name compression scheme
         let mut len = buf.get_u8();
         *offset += 1;
@@ -379,7 +375,11 @@ impl Fqdn {
                     label_offset += fqdn_labels[index].len() as u16;
                 }
 
-                let fqdn = fqdn_labels.join("");
+                let mut fqdn = fqdn_labels.join("");
+
+                if fqdn.is_empty() {
+                    fqdn.push_str(".");
+                }
 
                 return Ok(Self(fqdn));
             }
