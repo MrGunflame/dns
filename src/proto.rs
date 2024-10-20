@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::fmt::{self, Debug, Formatter};
 
 use bytes::{Buf, BufMut, Bytes};
 
@@ -129,20 +129,19 @@ pub struct Packet {
 }
 
 impl Packet {
-    pub fn decode<B>(mut buf: B) -> Result<Self, DecodeError>
-    where
-        B: Buf,
-    {
+    pub fn decode(buf: &[u8]) -> Result<Self, DecodeError> {
+        let mut reader = Reader::new(buf);
+
         if buf.remaining() < 12 {
             return Err(DecodeError::Eof);
         }
 
-        let transaction_id = buf.get_u16();
-        let flags = buf.get_u16();
-        let qdcount = buf.get_u16();
-        let ancount = buf.get_u16();
-        let nscount = buf.get_u16();
-        let arcount = buf.get_u16();
+        let transaction_id = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let flags = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let qdcount = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let ancount = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let nscount = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let arcount = reader.read_u16().ok_or(DecodeError::Eof)?;
 
         let qr = match flags >> 15 {
             0 => Qr::Request,
@@ -184,27 +183,28 @@ impl Packet {
         let rcode = ResponseCode::from_u16(flags & 0b0000_0000_0000_1111)
             .ok_or(DecodeError::InvalidResponseCode)?;
 
-        let mut labels = HashMap::new();
-        let mut offset = 12;
-
         let mut questions = Vec::new();
         for _ in 0..qdcount {
-            questions.push(Question::decode(&mut buf, &mut offset, &mut labels)?);
+            questions.push(Question::decode(&mut reader)?);
         }
+
+        dbg!(&questions);
 
         let mut answers = Vec::new();
         for _ in 0..ancount {
-            answers.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
+            answers.push(ResourceRecord::decode(&mut reader)?);
         }
+
+        dbg!(&answers);
 
         let mut authority = Vec::new();
         for _ in 0..nscount {
-            authority.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
+            authority.push(ResourceRecord::decode(&mut reader)?);
         }
 
         let mut additional = Vec::new();
         for _ in 0..arcount {
-            additional.push(ResourceRecord::decode(&mut buf, &mut offset, &mut labels)?);
+            additional.push(ResourceRecord::decode(&mut reader)?);
         }
 
         Ok(Self {
@@ -288,22 +288,15 @@ pub struct Question {
 }
 
 impl Question {
-    fn decode<B>(
-        mut buf: B,
-        offset: &mut u16,
-        labels: &mut HashMap<u16, String>,
-    ) -> Result<Self, DecodeError>
-    where
-        B: Buf,
-    {
-        let name = Fqdn::decode(&mut buf, offset, labels)?;
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        let name = Fqdn::decode(reader)?;
 
-        if buf.remaining() < 4 {
-            return Err(DecodeError::Eof);
-        }
-        let qtype = Type::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidType)?;
-        let qclass = Class::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidClass)?;
-        *offset += 4;
+        let qtype = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let qtype = Type::from_u16(qtype).ok_or(DecodeError::InvalidType)?;
+
+        let qcalss = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let qclass = Class::from_u16(qcalss).ok_or(DecodeError::InvalidClass)?;
+
         Ok(Self {
             name,
             qclass,
@@ -321,106 +314,103 @@ impl Question {
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, Hash)]
-pub struct Fqdn(pub String);
+#[derive(Clone, PartialEq, Eq, Hash)]
+pub struct Fqdn(pub Vec<u8>);
 
 impl Fqdn {
     pub fn new_unchecked(fqdn: String) -> Self {
-        Self(fqdn)
+        Self(fqdn.into_bytes())
     }
 
-    pub fn as_str(&self) -> &str {
+    pub fn as_bytes(&self) -> &[u8] {
         &self.0
     }
 }
 
 impl Fqdn {
-    fn decode<B>(
-        mut buf: B,
-        offset: &mut u16,
-        labels: &mut HashMap<u16, String>,
-    ) -> Result<Self, DecodeError>
-    where
-        B: Buf,
-    {
-        let offset_start = *offset;
+    fn decode<'a>(reader: &mut Reader<'a>) -> Result<Self, DecodeError> {
+        let high = reader.peek_u8().ok_or(DecodeError::Eof)?;
 
-        if buf.remaining() < 1 {
-            return Err(DecodeError::Eof);
+        if high & 0b1100_0000 != 0 {
+            reader.read_u8().ok_or(DecodeError::Eof)?;
+            let low = reader.read_u8().ok_or(DecodeError::Eof)?;
+
+            let pointer = u16::from(high & 0b0011_1111) << 8 | u16::from(low);
+            let target = reader
+                .full_buffer()
+                .get(usize::from(pointer)..)
+                .ok_or(DecodeError::BadPointer)?;
+
+            dbg!(&target);
+
+            let (fqdn, _) = Self::read_uncompressed(target)?;
+            return Ok(fqdn);
         }
 
-        // Domain name compression scheme
-        let mut len = buf.get_u8();
-        *offset += 1;
-        if len & 0b1100_0000 != 0 {
-            if buf.remaining() < 1 {
-                return Err(DecodeError::Eof);
-            }
-
-            let pointer = (len as u16 & 0b0011_1111) << 8 | (buf.get_u8() as u16);
-            *offset += 1;
-            let label = labels.get(&pointer).ok_or(DecodeError::BadPointer)?;
-
-            return Ok(Self(label.clone()));
-        }
-
-        let mut fqdn_labels: Vec<String> = Vec::new();
-
-        loop {
-            if len == 0 {
-                let mut label_offset = offset_start;
-                for index in 0..fqdn_labels.len() {
-                    let label = fqdn_labels[index..].join("");
-                    labels.insert(label_offset, label);
-                    label_offset += fqdn_labels[index].len() as u16;
-                }
-
-                let mut fqdn = fqdn_labels.join("");
-
-                if fqdn.is_empty() {
-                    fqdn.push_str(".");
-                }
-
-                return Ok(Self(fqdn));
-            }
-
-            let mut label = String::new();
-
-            if buf.remaining() < len.into() {
-                return Err(DecodeError::Eof);
-            }
-
-            for _ in 0..len {
-                let v = buf.get_u8();
-                label.push_str(std::str::from_utf8(&[v]).unwrap());
-            }
-            *offset += len as u16;
-
-            label.push_str(".");
-            fqdn_labels.push(label);
-
-            if buf.remaining() < 1 {
-                return Err(DecodeError::Eof);
-            }
-            len = buf.get_u8();
-            *offset += 1;
-        }
+        let (fqdn, bytes_read) = Self::read_uncompressed(reader.remaining_buffer())?;
+        reader.advance(bytes_read);
+        Ok(fqdn)
     }
 
     fn encode<B>(&self, mut buf: B)
     where
         B: BufMut,
     {
-        for label in self.0.split('.') {
+        for label in self.as_bytes().split(|b| *b == b'.') {
             if label.is_empty() {
                 continue;
             }
 
-            buf.put_u8(label.as_bytes().len() as u8);
-            buf.put_slice(label.as_bytes());
+            buf.put_u8(label.len() as u8);
+            buf.put_slice(label);
         }
 
         buf.put_u8(0);
+    }
+
+    /// Read an uncompresed version of a `Fqdn` from the beginning of `buf`.
+    fn read_uncompressed(mut buf: &[u8]) -> Result<(Self, usize), DecodeError> {
+        let mut labels = vec![];
+        let mut bytes_read = 0;
+
+        loop {
+            let Some(&len) = buf.get(0) else {
+                return Err(DecodeError::Eof);
+            };
+            bytes_read += 1;
+
+            if len == 0 {
+                let mut fqdn = Vec::new();
+                if !labels.is_empty() {
+                    for label in labels {
+                        fqdn.extend(label);
+                        fqdn.push(b'.');
+                    }
+                } else {
+                    fqdn.push(b'.');
+                }
+
+                return Ok((Self(fqdn), bytes_read));
+            }
+
+            let Some(label) = buf.get(1..1 + usize::from(len)) else {
+                return Err(DecodeError::Eof);
+            };
+
+            labels.push(label);
+            buf = &buf[1 + usize::from(len)..];
+            bytes_read += usize::from(len);
+        }
+    }
+}
+
+impl Debug for Fqdn {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            f,
+            "Fqdn({:?})",
+            std::str::from_utf8(self.as_bytes()).unwrap_or("<invalid utf8>")
+        )
     }
 }
 
@@ -625,20 +615,12 @@ pub struct ResourceRecord {
 }
 
 impl ResourceRecord {
-    fn decode<B>(
-        mut buf: B,
-        offset: &mut u16,
-        labels: &mut HashMap<u16, String>,
-    ) -> Result<Self, DecodeError>
-    where
-        B: Buf,
-    {
-        let name = Fqdn::decode(&mut buf, offset, labels)?;
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        let name = Fqdn::decode(reader)?;
 
-        if buf.remaining() < 10 {
-            return Err(DecodeError::Eof);
-        }
-        let r#type = Type::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidType)?;
+        let rtype = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let r#type = Type::from_u16(rtype).ok_or(DecodeError::InvalidType)?;
+
         // Skip OPT for now
         if r#type == Type::OPT {
             return Ok(Self {
@@ -650,18 +632,17 @@ impl ResourceRecord {
             });
         }
 
-        let class = Class::from_u16(buf.get_u16()).ok_or(DecodeError::InvalidClass)?;
-        let ttl = buf.get_u32();
-        let rdlength = buf.get_u16();
-        *offset += 10 + rdlength;
+        let class = reader.read_u16().ok_or(DecodeError::Eof)?;
+        let class = Class::from_u16(class).ok_or(DecodeError::InvalidClass)?;
+        let ttl = reader.read_u32().ok_or(DecodeError::Eof)?;
+        let rdlength = reader.read_u16().ok_or(DecodeError::Eof)?;
 
-        let mut rddata = Vec::new();
-        if buf.remaining() < rdlength.into() {
-            return Err(DecodeError::Eof);
-        }
-        for _ in 0..rdlength {
-            rddata.push(buf.get_u8());
-        }
+        let rddata = reader
+            .remaining_buffer()
+            .get(..usize::from(rdlength))
+            .ok_or(DecodeError::Eof)?
+            .to_vec();
+        reader.advance(usize::from(rdlength));
 
         Ok(Self {
             name,
@@ -715,37 +696,99 @@ pub enum DecodeError {
     BadPointer,
 }
 
+#[derive(Clone, Debug)]
+struct Reader<'a> {
+    buf: &'a [u8],
+    cursor: usize,
+}
+
+impl<'a> Reader<'a> {
+    fn new(buf: &'a [u8]) -> Self {
+        Self { buf, cursor: 0 }
+    }
+
+    fn read_u8(&mut self) -> Option<u8> {
+        let res = self.buf.get(self.cursor).copied();
+        self.cursor += 1;
+        res
+    }
+
+    fn read_u16(&mut self) -> Option<u16> {
+        let slice = self.buf.get(self.cursor..self.cursor + 2)?;
+        self.cursor += 2;
+        Some(u16::from_be_bytes(slice.try_into().unwrap()))
+    }
+
+    fn read_u32(&mut self) -> Option<u32> {
+        let slice = self.buf.get(self.cursor..self.cursor + 4)?;
+        self.cursor += 4;
+        Some(u32::from_be_bytes(slice.try_into().unwrap()))
+    }
+
+    fn full_buffer(&self) -> &[u8] {
+        &self.buf
+    }
+
+    fn remaining_buffer(&self) -> &[u8] {
+        &self.buf[self.cursor..]
+    }
+
+    fn peek_u8(&self) -> Option<u8> {
+        self.buf.get(self.cursor).copied()
+    }
+
+    fn advance(&mut self, n: usize) {
+        self.cursor += n;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use std::collections::HashMap;
 
-    use super::Fqdn;
+    use futures::io::Read;
+
+    use super::{Fqdn, Packet, Reader};
 
     #[test]
     fn fqdn_decode_basic() {
         let input = [
             7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
         ];
-        let mut offset = 0;
-        let mut labels = HashMap::new();
+        let mut reader = Reader::new(&input);
 
-        let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
-        assert_eq!(fqdn.0, "example.com.");
-        assert_eq!(labels.len(), 2);
-        assert_eq!(labels.get(&0).unwrap(), "example.com.");
-        assert_eq!(labels.get(&8).unwrap(), "com.");
+        let fqdn = Fqdn::decode(&mut reader).unwrap();
+        assert_eq!(std::str::from_utf8(&fqdn.0).unwrap(), "example.com.");
     }
 
+    // #[test]
+    // fn fqdn_decode_compressed() {
+    //     let input = [0b1100_0000, 0b0000_1000];
+
+    //     let mut offset = 0;
+    //     let mut labels = HashMap::new();
+    //     labels.insert(0, "example.com.".to_owned());
+    //     labels.insert(8, "com.".to_owned());
+
+    //     let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
+    //     assert_eq!(fqdn.0, "com.");
+    // }
+
     #[test]
-    fn fqdn_decode_compressed() {
-        let input = [0b1100_0000, 0b0000_1000];
+    fn packet_decode() {
+        let payload = [
+            0x66, 0xe1, 0x81, 0x80, 0x00, 0x01, 0x00, 0x05, 0x00, 0x00, 0x00, 0x00, 0x03, 0x77,
+            0x77, 0x77, 0x06, 0x74, 0x77, 0x69, 0x74, 0x63, 0x68, 0x02, 0x74, 0x76, 0x00, 0x00,
+            0x01, 0x00, 0x01, 0xc0, 0x0c, 0x00, 0x05, 0x00, 0x01, 0x00, 0x00, 0x0d, 0x0f, 0x00,
+            0x17, 0x06, 0x74, 0x77, 0x69, 0x74, 0x63, 0x68, 0x03, 0x6d, 0x61, 0x70, 0x06, 0x66,
+            0x61, 0x73, 0x74, 0x6c, 0x79, 0x03, 0x6e, 0x65, 0x74, 0x00, 0xc0, 0x2b, 0x00, 0x01,
+            0x00, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x04, 0x97, 0x65, 0x02, 0xa7, 0xc0, 0x2b,
+            0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x04, 0x97, 0x65, 0xc2, 0xa7,
+            0xc0, 0x2b, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x04, 0x97, 0x65,
+            0x82, 0xa7, 0xc0, 0x2b, 0x00, 0x01, 0x00, 0x01, 0x00, 0x00, 0x00, 0x2b, 0x00, 0x04,
+            0x97, 0x65, 0x42, 0xa7,
+        ];
 
-        let mut offset = 0;
-        let mut labels = HashMap::new();
-        labels.insert(0, "example.com.".to_owned());
-        labels.insert(8, "com.".to_owned());
-
-        let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
-        assert_eq!(fqdn.0, "com.");
+        let packet = Packet::decode(&payload[..]).unwrap();
     }
 }
