@@ -1,4 +1,3 @@
-use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -37,12 +36,11 @@ impl State {
 
     /// Resolve a single [`Question`].
     pub async fn resolve(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
-        let mut questions: VecDeque<_> = vec![question.clone()].into();
         let mut answers = Vec::new();
 
-        while let Some(question) = questions.pop_front() {
-            dbg!(&question);
-
+        let mut question_slot = Some(question.clone());
+        while let Some(question) = question_slot.take() {
+            // If we have an exact match in the cache, return it.
             if let Some(answer) = self.cache.get(&question) {
                 self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
                 tracing::debug!("using cached result (valid for {:?})", answer.ttl());
@@ -58,7 +56,7 @@ impl State {
             // See https://datatracker.ietf.org/doc/html/rfc1034#section-3.6.2
             if question.qtype != Type::CNAME {
                 if let Some(answer) = self.cache.get(&Question {
-                    name: question.name,
+                    name: question.name.clone(),
                     qtype: Type::CNAME,
                     qclass: question.qclass,
                 }) {
@@ -68,20 +66,29 @@ impl State {
                     };
 
                     answers.push(answer);
-                    questions.push_back(Question {
+                    question_slot = Some(Question {
                         name: origin,
                         qtype: question.qtype,
                         qclass: question.qclass,
                     });
+
+                    continue;
                 }
             }
+
+            // If we don't have the answer in the cache, resolve it from
+            // an origin server.
+            // Note that blocking is ok here since if this function is called
+            // multiple times, we have a dependency on the previous record
+            // and cannot resolve concurrently.
+            answers.extend(self.resolve_origin(&question).await?);
         }
 
         if !answers.is_empty() {
-            return Ok(answers);
+            Ok(answers)
+        } else {
+            Err(ResolverError::NoAnswer)
         }
-
-        self.resolve_origin(question).await
     }
 
     async fn resolve_origin(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
