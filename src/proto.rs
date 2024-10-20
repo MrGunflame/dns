@@ -1,4 +1,6 @@
+use std::char::MAX;
 use std::fmt::{self, Debug, Formatter};
+use std::thread::panicking;
 
 use bytes::{Buf, BufMut, Bytes};
 
@@ -329,27 +331,77 @@ impl Fqdn {
 
 impl Fqdn {
     fn decode<'a>(reader: &mut Reader<'a>) -> Result<Self, DecodeError> {
-        let high = reader.peek_u8().ok_or(DecodeError::Eof)?;
+        let bytes = reader.full_buffer();
+        let (fqdn, advance_count) = Self::decode_from_bytes(bytes, reader.cursor)?;
+        reader.advance(advance_count);
 
-        if high & 0b1100_0000 != 0 {
-            reader.read_u8().ok_or(DecodeError::Eof)?;
-            let low = reader.read_u8().ok_or(DecodeError::Eof)?;
+        Ok(fqdn)
+    }
 
-            let pointer = u16::from(high & 0b0011_1111) << 8 | u16::from(low);
-            let target = reader
-                .full_buffer()
-                .get(usize::from(pointer)..)
-                .ok_or(DecodeError::BadPointer)?;
+    fn decode_from_bytes(bytes: &[u8], start: usize) -> Result<(Self, usize), DecodeError> {
+        // This implementation will always follow pointers,
+        // event if they recursively point to the same pointer.
+        // This makes it possible to craft invalid FQDNs that would
+        // cause this function to hang forever.
+        // To prevent this we process at most `MAX_LABELS` labels
+        // and abort if exceeded.
+        const MAX_LABELS: usize = 64;
 
-            dbg!(&target);
+        let mut offset = start;
+        let mut advance_count = 0;
+        let mut advance_buffer = true;
 
-            let (fqdn, _) = Self::read_uncompressed(target)?;
-            return Ok(fqdn);
+        let mut labels = Vec::new();
+        let mut label_count = 0;
+
+        loop {
+            let high = *bytes.get(offset).ok_or(DecodeError::Eof)?;
+
+            if high & 0b1100_0000 != 0 {
+                let low = *bytes.get(offset + 1).ok_or(DecodeError::Eof)?;
+
+                if advance_buffer {
+                    advance_count += 2;
+                }
+
+                advance_buffer = false;
+
+                let pointer = u16::from(high & 0b0011_1111) << 8 | u16::from(low);
+                bytes
+                    .get(usize::from(pointer)..)
+                    .ok_or(DecodeError::BadPointer)?;
+
+                offset = pointer.into();
+            }
+
+            let len = *bytes.get(offset).ok_or(DecodeError::Eof)?;
+            if len == 0 {
+                if advance_buffer {
+                    advance_count += 1;
+                }
+
+                break;
+            }
+
+            let label = bytes
+                .get(offset + 1..offset + 1 + usize::from(len))
+                .ok_or(DecodeError::Eof)?;
+
+            labels.extend(label);
+            labels.push(b'.');
+
+            label_count += 1;
+            if label_count == MAX_LABELS {
+                return Err(DecodeError::FqdnTooLong);
+            }
+
+            offset += usize::from(len) + 1;
+            if advance_buffer {
+                advance_count += usize::from(len) + 1;
+            }
         }
 
-        let (fqdn, bytes_read) = Self::read_uncompressed(reader.remaining_buffer())?;
-        reader.advance(bytes_read);
-        Ok(fqdn)
+        Ok((Self(labels), advance_count))
     }
 
     fn encode<B>(&self, mut buf: B)
@@ -366,41 +418,6 @@ impl Fqdn {
         }
 
         buf.put_u8(0);
-    }
-
-    /// Read an uncompresed version of a `Fqdn` from the beginning of `buf`.
-    fn read_uncompressed(mut buf: &[u8]) -> Result<(Self, usize), DecodeError> {
-        let mut labels = vec![];
-        let mut bytes_read = 0;
-
-        loop {
-            let Some(&len) = buf.get(0) else {
-                return Err(DecodeError::Eof);
-            };
-            bytes_read += 1;
-
-            if len == 0 {
-                let mut fqdn = Vec::new();
-                if !labels.is_empty() {
-                    for label in labels {
-                        fqdn.extend(label);
-                        fqdn.push(b'.');
-                    }
-                } else {
-                    fqdn.push(b'.');
-                }
-
-                return Ok((Self(fqdn), bytes_read));
-            }
-
-            let Some(label) = buf.get(1..1 + usize::from(len)) else {
-                return Err(DecodeError::Eof);
-            };
-
-            labels.push(label);
-            buf = &buf[1 + usize::from(len)..];
-            bytes_read += usize::from(len);
-        }
     }
 }
 
@@ -694,6 +711,7 @@ pub enum DecodeError {
     InvalidType,
     InvalidClass,
     BadPointer,
+    FqdnTooLong,
 }
 
 #[derive(Clone, Debug)]
@@ -773,6 +791,33 @@ mod tests {
     //     let fqdn = Fqdn::decode(&input[..], &mut offset, &mut labels).unwrap();
     //     assert_eq!(fqdn.0, "com.");
     // }
+
+    #[test]
+    fn fqdn_decode_compressed() {
+        let mut input = vec![
+            7, b'e', b'x', b'a', b'm', b'p', b'l', b'e', 3, b'c', b'o', b'm', 0,
+        ];
+        let start = input.len();
+        input.extend([3, b'w', b'w', b'w', 0b1100_0000, 0b0000_0000]);
+
+        let mut reader = Reader::new(&input);
+        reader.advance(start);
+
+        let fqdn = Fqdn::decode(&mut reader).unwrap();
+        assert_eq!(std::str::from_utf8(&fqdn.0).unwrap(), "www.example.com.");
+    }
+
+    #[test]
+    fn fqdn_recursive_offset() {
+        let mut input = vec![7, b'e', b'x', b'a', b'm', b'p', b'l', b'e'];
+        let start = input.len();
+        input.extend([0b1100_0000, 0b0000_0000]);
+
+        let mut reader = Reader::new(&input);
+        reader.advance(start);
+
+        Fqdn::decode(&mut reader).unwrap_err();
+    }
 
     #[test]
     fn packet_decode() {
