@@ -1,6 +1,5 @@
-use std::char::MAX;
 use std::fmt::{self, Debug, Formatter};
-use std::thread::panicking;
+use std::net::{Ipv4Addr, Ipv6Addr};
 
 use bytes::{Buf, BufMut, Bytes};
 
@@ -190,14 +189,10 @@ impl Packet {
             questions.push(Question::decode(&mut reader)?);
         }
 
-        dbg!(&questions);
-
         let mut answers = Vec::new();
         for _ in 0..ancount {
             answers.push(ResourceRecord::decode(&mut reader)?);
         }
-
-        dbg!(&answers);
 
         let mut authority = Vec::new();
         for _ in 0..nscount {
@@ -330,14 +325,6 @@ impl Fqdn {
 }
 
 impl Fqdn {
-    fn decode<'a>(reader: &mut Reader<'a>) -> Result<Self, DecodeError> {
-        let bytes = reader.full_buffer();
-        let (fqdn, advance_count) = Self::decode_from_bytes(bytes, reader.cursor)?;
-        reader.advance(advance_count);
-
-        Ok(fqdn)
-    }
-
     fn decode_from_bytes(bytes: &[u8], start: usize) -> Result<(Self, usize), DecodeError> {
         // This implementation will always follow pointers,
         // event if they recursively point to the same pointer.
@@ -403,7 +390,9 @@ impl Fqdn {
 
         Ok((Self(labels), advance_count))
     }
+}
 
+impl Encode for Fqdn {
     fn encode<B>(&self, mut buf: B)
     where
         B: BufMut,
@@ -419,6 +408,20 @@ impl Fqdn {
 
         buf.put_u8(0);
     }
+
+    fn len(&self) -> u16 {
+        self.0.len() as u16 + 1
+    }
+}
+
+impl Decode for Fqdn {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        let bytes = reader.full_buffer();
+        let (fqdn, advance_count) = Self::decode_from_bytes(bytes, reader.cursor)?;
+        reader.advance(advance_count);
+
+        Ok(fqdn)
+    }
 }
 
 impl Debug for Fqdn {
@@ -428,6 +431,85 @@ impl Debug for Fqdn {
             "Fqdn({:?})",
             std::str::from_utf8(self.as_bytes()).unwrap_or("<invalid utf8>")
         )
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum RecordData {
+    A(Ipv4Addr),
+    NS(Fqdn),
+    CNAME(Fqdn),
+    SOA(SoaData),
+    PTR(Fqdn),
+    MX(MxData),
+    TXT(String),
+    AAAA(Ipv6Addr),
+    Other(Type, Bytes),
+}
+
+impl RecordData {
+    fn decode(len: u16, typ: Type, reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        let res = match typ {
+            Type::A => Ok(Self::A(Ipv4Addr::decode(reader)?)),
+            Type::NS => Ok(Self::NS(Fqdn::decode(reader)?)),
+            Type::CNAME => Ok(Self::CNAME(Fqdn::decode(reader)?)),
+            Type::SOA => Ok(Self::SOA(SoaData::decode(reader)?)),
+            Type::PTR => Ok(Self::PTR(Fqdn::decode(reader)?)),
+            Type::MX => Ok(Self::MX(MxData::decode(reader)?)),
+            Type::TXT => {
+                let buf = reader
+                    .remaining_buffer()
+                    .get(usize::from(len)..)
+                    .ok_or(DecodeError::Eof)?;
+                let txt = String::from_utf8(buf.to_vec()).map_err(|_| DecodeError::InvalidUtf8)?;
+                Ok(Self::TXT(txt))
+            }
+            Type::AAAA => Ok(Self::AAAA(Ipv6Addr::decode(reader)?)),
+            _ => {
+                let bytes = reader
+                    .remaining_buffer()
+                    .get(usize::from(len)..)
+                    .ok_or(DecodeError::Eof)?;
+                Ok(Self::Other(typ, Bytes::from(bytes.to_vec())))
+            }
+        };
+
+        res
+    }
+
+    fn encode<B>(&self, mut buf: B)
+    where
+        B: BufMut,
+    {
+        match self {
+            Self::A(data) => data.encode(buf),
+            Self::NS(data) => data.encode(buf),
+            Self::CNAME(data) => data.encode(buf),
+            Self::SOA(data) => data.encode(buf),
+            Self::PTR(data) => data.encode(buf),
+            Self::MX(data) => data.encode(buf),
+            Self::TXT(data) => {
+                buf.put_slice(data.as_bytes());
+            }
+            Self::AAAA(data) => data.encode(buf),
+            Self::Other(_, data) => {
+                buf.put_slice(&data);
+            }
+        }
+    }
+
+    pub fn len(&self) -> u16 {
+        match self {
+            Self::A(data) => data.len(),
+            Self::NS(data) => data.len(),
+            Self::CNAME(data) => data.len(),
+            Self::SOA(data) => data.len(),
+            Self::PTR(data) => data.len(),
+            Self::MX(data) => data.len(),
+            Self::TXT(data) => data.len() as u16,
+            Self::AAAA(data) => data.len(),
+            Self::Other(_, data) => data.len() as u16,
+        }
     }
 }
 
@@ -628,7 +710,7 @@ pub struct ResourceRecord {
     pub r#type: Type,
     pub class: Class,
     pub ttl: u32,
-    pub rddata: Bytes,
+    pub rdata: RecordData,
 }
 
 impl ResourceRecord {
@@ -645,7 +727,7 @@ impl ResourceRecord {
                 r#type,
                 ttl: 0,
                 class: Class::In,
-                rddata: Bytes::new(),
+                rdata: RecordData::Other(Type::OPT, Bytes::new()),
             });
         }
 
@@ -654,19 +736,14 @@ impl ResourceRecord {
         let ttl = reader.read_u32().ok_or(DecodeError::Eof)?;
         let rdlength = reader.read_u16().ok_or(DecodeError::Eof)?;
 
-        let rddata = reader
-            .remaining_buffer()
-            .get(..usize::from(rdlength))
-            .ok_or(DecodeError::Eof)?
-            .to_vec();
-        reader.advance(usize::from(rdlength));
+        let rdata = RecordData::decode(rdlength, r#type, reader)?;
 
         Ok(Self {
             name,
             r#type,
             class,
             ttl,
-            rddata: Bytes::from(rddata),
+            rdata,
         })
     }
 
@@ -678,8 +755,8 @@ impl ResourceRecord {
         buf.put_u16(self.r#type.to_u16());
         buf.put_u16(self.class.to_u16());
         buf.put_u32(self.ttl);
-        buf.put_u16(self.rddata.len() as u16);
-        buf.put_slice(&self.rddata);
+        buf.put_u16(self.rdata.len());
+        self.rdata.encode(&mut buf);
     }
 }
 
@@ -712,6 +789,8 @@ pub enum DecodeError {
     InvalidClass,
     BadPointer,
     FqdnTooLong,
+    UnsupportedType(Type),
+    InvalidUtf8,
 }
 
 #[derive(Clone, Debug)]
@@ -760,13 +839,200 @@ impl<'a> Reader<'a> {
     }
 }
 
+macro_rules! define_record {
+    ($struct_vis:vis struct $struct_name:ident {
+        $($field_vis:vis $field_name:ident: $field_type:ty,)*
+    }) => {
+        #[derive(Clone, Debug)]
+        $struct_vis struct $struct_name {
+            $(
+                $field_vis $field_name: $field_type,
+            )*
+        }
+
+        impl Encode for $struct_name {
+            fn encode<B>(&self, mut buf: B)
+            where
+                B: BufMut,
+            {
+                $(
+                    self.$field_name.encode(&mut buf);
+                )*
+            }
+
+            fn len(&self) -> u16 {
+                0 $( + self.$field_name.len() )*
+            }
+        }
+
+        impl Decode for $struct_name {
+            fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+                $(
+                    let $field_name = <$field_type as Decode>::decode(reader)?;
+                )*
+
+                Ok(Self {
+                    $(
+                        $field_name: $field_name,
+                    )*
+                })
+            }
+        }
+    };
+}
+
+define_record! {
+    pub struct SoaData {
+        pub mname: Fqdn,
+        pub rname: Fqdn,
+        pub serial: u32,
+        pub refresh: u32,
+        pub retry: u32,
+        pub expire: u32,
+        pub minimum: u32,
+    }
+}
+
+define_record! {
+    pub struct MxData {
+        pub preference: u16,
+        pub exchange: Fqdn,
+    }
+}
+
+trait Encode {
+    fn encode<B>(&self, buf: B)
+    where
+        B: BufMut;
+
+    fn len(&self) -> u16;
+}
+
+trait Decode: Sized {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError>;
+}
+
+impl Encode for u8 {
+    fn encode<B>(&self, mut buf: B)
+    where
+        B: BufMut,
+    {
+        buf.put_u8(*self);
+    }
+
+    fn len(&self) -> u16 {
+        1
+    }
+}
+
+impl Decode for u8 {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        reader.read_u8().ok_or(DecodeError::Eof)
+    }
+}
+
+impl Encode for u16 {
+    fn encode<B>(&self, mut buf: B)
+    where
+        B: BufMut,
+    {
+        buf.put_u16(*self);
+    }
+
+    fn len(&self) -> u16 {
+        2
+    }
+}
+
+impl Decode for u16 {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        reader.read_u16().ok_or(DecodeError::Eof)
+    }
+}
+
+impl Encode for u32 {
+    fn encode<B>(&self, mut buf: B)
+    where
+        B: BufMut,
+    {
+        buf.put_u32(*self);
+    }
+
+    fn len(&self) -> u16 {
+        4
+    }
+}
+
+impl Decode for u32 {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        reader.read_u32().ok_or(DecodeError::Eof)
+    }
+}
+
+impl<const N: usize> Decode for [u8; N] {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        let mut buf = [0; N];
+        for index in 0..N {
+            buf[index] = u8::decode(reader)?;
+        }
+        Ok(buf)
+    }
+}
+
+impl Encode for [u8] {
+    fn encode<B>(&self, mut buf: B)
+    where
+        B: BufMut,
+    {
+        buf.put_slice(self);
+    }
+
+    fn len(&self) -> u16 {
+        self.len() as u16
+    }
+}
+
+impl Encode for Ipv4Addr {
+    fn encode<B>(&self, buf: B)
+    where
+        B: BufMut,
+    {
+        self.octets().encode(buf);
+    }
+
+    fn len(&self) -> u16 {
+        self.octets().len() as u16
+    }
+}
+
+impl Decode for Ipv4Addr {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        <[u8; 4]>::decode(reader).map(Self::from)
+    }
+}
+
+impl Encode for Ipv6Addr {
+    fn encode<B>(&self, buf: B)
+    where
+        B: BufMut,
+    {
+        self.octets().encode(buf);
+    }
+
+    fn len(&self) -> u16 {
+        self.octets().len() as u16
+    }
+}
+
+impl Decode for Ipv6Addr {
+    fn decode(reader: &mut Reader<'_>) -> Result<Self, DecodeError> {
+        <[u8; 16]>::decode(reader).map(Self::from)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use std::collections::HashMap;
-
-    use futures::io::Read;
-
-    use super::{Fqdn, Packet, Reader};
+    use super::{Decode, Fqdn, Packet, Reader};
 
     #[test]
     fn fqdn_decode_basic() {

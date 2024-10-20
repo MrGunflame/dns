@@ -1,5 +1,6 @@
 use std::io;
 use std::net::SocketAddr;
+use std::time::Duration;
 
 use futures::stream::{FuturesOrdered, StreamExt};
 use futures::{select_biased, FutureExt};
@@ -71,14 +72,16 @@ async fn handle_request(packet: Packet, addr: SocketAddr, socket: &UdpSocket, st
 
     for question in &packet.questions {
         match state.resolve(question).await {
-            Ok(answer) => {
-                answers.push(ResourceRecord {
-                    name: question.name.clone(),
-                    r#type: answer.r#type,
-                    class: answer.class,
-                    ttl: answer.ttl().as_secs() as u32,
-                    rddata: answer.data.clone(),
-                });
+            Ok(resp) => {
+                for answer in resp {
+                    answers.push(ResourceRecord {
+                        r#type: answer.r#type,
+                        class: answer.class,
+                        ttl: answer.ttl().as_secs() as u32,
+                        rdata: answer.data,
+                        name: answer.name,
+                    });
+                }
             }
             Err(err) => {
                 tracing::error!("failed to resolve query: {:?}", err);

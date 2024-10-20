@@ -1,3 +1,4 @@
+use std::collections::VecDeque;
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
@@ -8,7 +9,7 @@ use tokio::sync::Notify;
 use crate::cache::{Cache, Resource};
 use crate::config::Config;
 use crate::metrics::Metrics;
-use crate::proto::{Fqdn, Question};
+use crate::proto::{Fqdn, Question, RecordData, Type};
 use crate::upstream::https::HttpsResolver;
 use crate::upstream::udp::UdpResolver;
 use crate::upstream::{Resolver, ResolverError, Zones};
@@ -35,13 +36,55 @@ impl State {
     }
 
     /// Resolve a single [`Question`].
-    pub async fn resolve(&self, question: &Question) -> Result<Resource, ResolverError> {
-        if let Some(answer) = self.cache.get(&question) {
-            self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-            tracing::debug!("using cached result (valid for {:?})", answer.ttl());
-            return Ok(answer.clone());
+    pub async fn resolve(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
+        let mut questions: VecDeque<_> = vec![question.clone()].into();
+        let mut answers = Vec::new();
+
+        while let Some(question) = questions.pop_front() {
+            dbg!(&question);
+
+            if let Some(answer) = self.cache.get(&question) {
+                self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                tracing::debug!("using cached result (valid for {:?})", answer.ttl());
+
+                answers.push(answer);
+                continue;
+            }
+
+            // If we fail to find a RR for the requested `question` we
+            // have to check whether we have a CNAME record on the FQDN.
+            // If we do we need to resolve the FQDN that the CNAME points
+            // at and repeat the `question` with the new FQDN.
+            // See https://datatracker.ietf.org/doc/html/rfc1034#section-3.6.2
+            if question.qtype != Type::CNAME {
+                if let Some(answer) = self.cache.get(&Question {
+                    name: question.name,
+                    qtype: Type::CNAME,
+                    qclass: question.qclass,
+                }) {
+                    let origin = match &answer.data {
+                        RecordData::CNAME(fqdn) => fqdn.clone(),
+                        _ => continue,
+                    };
+
+                    answers.push(answer);
+                    questions.push_back(Question {
+                        name: origin,
+                        qtype: question.qtype,
+                        qclass: question.qclass,
+                    });
+                }
+            }
         }
 
+        if !answers.is_empty() {
+            return Ok(answers);
+        }
+
+        self.resolve_origin(question).await
+    }
+
+    async fn resolve_origin(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
         let Some(resolvers) = self.zones.lookup(&question.name) else {
             tracing::error!("no nameservers for root zone configured");
             return Err(ResolverError::NoAnswer);
@@ -49,7 +92,7 @@ impl State {
 
         for resolver in resolvers {
             tracing::debug!("trying upstream {}", resolver.addr());
-            let answer = match resolver.resolve(&question).await {
+            let answers = match resolver.resolve(&question).await {
                 Ok(answer) => answer,
                 Err(err) => {
                     tracing::error!("upstream {} failed: {:?}", resolver.addr(), err);
@@ -57,22 +100,28 @@ impl State {
                 }
             };
 
-            let res = Resource {
-                r#type: answer.r#type,
-                class: answer.class,
-                data: answer.rddata,
-                valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
-            };
+            let mut resources = Vec::new();
+            for answer in answers {
+                let res = Resource {
+                    name: answer.name,
+                    r#type: answer.r#type,
+                    class: answer.class,
+                    data: answer.rdata.into(),
+                    valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
+                };
 
-            if answer.ttl != 0 {
-                self.cache.insert(question.clone(), res.clone());
-                self.cache_wakeup.notify_one();
-                self.metrics
-                    .cache_size
-                    .fetch_add(res.data.len() as u64, Ordering::Relaxed);
+                if answer.ttl != 0 {
+                    self.cache.insert(res.clone());
+                    self.cache_wakeup.notify_one();
+                    self.metrics
+                        .cache_size
+                        .fetch_add(res.data.len() as u64, Ordering::Relaxed);
+                }
+
+                resources.push(res);
             }
 
-            return Ok(res);
+            return Ok(resources);
         }
 
         Err(ResolverError::NoAnswer)

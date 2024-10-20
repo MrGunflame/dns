@@ -28,7 +28,7 @@ pub enum Resolver {
 }
 
 impl Resolver {
-    pub async fn resolve(&self, question: &Question) -> Result<ResourceRecord, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
         let timeout = tokio::time::sleep(self.timeout()).fuse();
         futures::pin_mut!(timeout);
 
@@ -61,22 +61,23 @@ impl Resolver {
 
 #[derive(Debug, Default)]
 pub struct Zones {
-    resolvers: HashMap<Box<str>, Vec<Resolver>>,
+    resolvers: HashMap<Box<[u8]>, Vec<Resolver>>,
 }
 
 impl Zones {
     pub fn lookup(&self, fqdn: &Fqdn) -> Option<&[Resolver]> {
-        let mut zone = fqdn.as_str();
+        let mut zone = fqdn.as_bytes();
 
         loop {
             if let Some(resolvers) = self.resolvers.get(zone) {
                 return Some(resolvers);
             }
 
-            if let Some((_, suffix)) = zone.split_once('.') {
-                zone = suffix;
+            if let Some(index) = memchr::memchr(b'.', zone) {
+                let (_, rem) = zone.split_at(index + 1);
+                zone = rem;
                 if zone.is_empty() {
-                    zone = ".";
+                    zone = b".";
                 }
             } else {
                 return None;
@@ -86,7 +87,7 @@ impl Zones {
 
     pub fn insert(&mut self, fqdn: Fqdn, resolver: Resolver) {
         self.resolvers
-            .entry(fqdn.0.into_boxed_str())
+            .entry(fqdn.0.into_boxed_slice())
             .or_default()
             .push(resolver);
     }
@@ -107,9 +108,9 @@ mod tests {
         let mut zones = Zones::default();
         zones
             .resolvers
-            .insert("example.com.".to_owned().into_boxed_str(), Vec::new());
+            .insert(b"example.com.".to_vec().into_boxed_slice(), Vec::new());
 
-        assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
+        assert!(zones.lookup(&Fqdn(b"example.com.".to_vec())).is_some());
     }
 
     #[test]
@@ -117,8 +118,8 @@ mod tests {
         let mut zones = Zones::default();
         zones
             .resolvers
-            .insert(".".to_owned().into_boxed_str(), Vec::new());
+            .insert(b".".to_vec().into_boxed_slice(), Vec::new());
 
-        assert!(zones.lookup(&Fqdn("example.com.".to_owned())).is_some());
+        assert!(zones.lookup(&Fqdn(b"example.com.".to_vec())).is_some());
     }
 }

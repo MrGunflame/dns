@@ -25,7 +25,7 @@ impl HttpsResolver {
         }
     }
 
-    pub async fn resolve(&self, question: &Question) -> Result<ResourceRecord, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
         let packet = Packet {
             transaction_id: rand::random(),
             qr: Qr::Request,
@@ -62,17 +62,8 @@ impl HttpsResolver {
 
         let data = resp.bytes().await.map_err(ResolverError::Http)?;
 
-        let resp = Packet::decode(data).map_err(ResolverError::Decode)?;
+        let resp = Packet::decode(&data).map_err(ResolverError::Decode)?;
 
-        for answer in resp.answers {
-            if answer.name == question.name
-                && answer.r#type == question.qtype
-                && answer.class == question.qclass
-            {
-                return Ok(answer);
-            }
-        }
-
-        Err(ResolverError::NoAnswer)
+        Ok(resp.answers)
     }
 }

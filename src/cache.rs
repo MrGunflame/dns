@@ -1,11 +1,10 @@
 use std::collections::{BTreeMap, HashMap};
 use std::time::{Duration, Instant};
 
-use bytes::Bytes;
 use parking_lot::RwLock;
 use tokio::sync::Notify;
 
-use crate::proto::{Class, Question, Type};
+use crate::proto::{Class, Fqdn, Question, RecordData, Type};
 
 #[derive(Debug, Default)]
 pub struct Cache {
@@ -19,7 +18,13 @@ impl Cache {
         self.entries.read().get(question).cloned()
     }
 
-    pub fn insert(&self, question: Question, resource: Resource) {
+    pub fn insert(&self, resource: Resource) {
+        let question = Question {
+            name: resource.name.clone(),
+            qtype: resource.r#type,
+            qclass: resource.class,
+        };
+
         self.expiration
             .write()
             .insert(resource.valid_until, question.clone());
@@ -43,9 +48,10 @@ impl Cache {
 
 #[derive(Clone, Debug)]
 pub struct Resource {
+    pub name: Fqdn,
     pub r#type: Type,
     pub class: Class,
-    pub data: Bytes,
+    pub data: RecordData,
     pub valid_until: Instant,
 }
 
