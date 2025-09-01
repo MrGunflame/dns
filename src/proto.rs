@@ -289,7 +289,7 @@ impl Question {
         let name = Fqdn::decode(reader)?;
 
         let qtype = reader.read_u16().ok_or(DecodeError::Eof)?;
-        let qtype = Type::from_u16(qtype).ok_or(DecodeError::InvalidType)?;
+        let qtype = Type::from_bits(qtype);
 
         let qcalss = reader.read_u16().ok_or(DecodeError::Eof)?;
         let qclass = Class::from_u16(qcalss).ok_or(DecodeError::InvalidClass)?;
@@ -306,7 +306,7 @@ impl Question {
         B: BufMut,
     {
         self.name.encode(&mut buf);
-        buf.put_u16(self.qtype.to_u16());
+        buf.put_u16(self.qtype.to_bits());
         buf.put_u16(self.qclass.to_u16());
     }
 }
@@ -514,100 +514,61 @@ impl RecordData {
 }
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
-pub enum Type {
-    // RFC 1035
-    A,
-    NS,
-    MD,
-    MF,
-    CNAME,
-    SOA,
-    MB,
-    MG,
-    MR,
-    NULL,
-    WKS,
-    PTR,
-    HINFO,
-    MINFO,
-    MX,
-    TXT,
-    // RFC 3596
-    AAAA,
-    // RFC 1183
-    AFSDB,
-    // RFC 3123
-    APL,
-    // RFC 6844
-    CAA,
-    // RFC 7344
-    CDNSKEY,
-    CDS,
-    // RFC 4398
-    CERT,
-    // RFC 7477
-    CSYNC,
-    // RFC 4701
-    DHCID,
-    // RFC 4431
-    DLV,
-    // RFC 6672
-    DNAME,
-    // RFC 4034
-    DNSKEY,
-    DS,
-    // RFC 7043
-    EUI48,
-    EUI64,
-    // RFC 8005
-    HIP,
-    // RFC 9460
-    HTTPS,
-    // RFC 4025
-    IPSECKEY,
-    // RFC 2535
-    KEY,
-    // RFC 2230
-    KX,
-    // RFC 1876
-    LOC,
-    // RFC 3403
-    NAPTR,
-    // RFC 4034
-    NSEC,
-    // RFC 5155
-    NSEC3,
-    // RFC 5155
-    NSEC3PARAM,
-    // RFC 7929
-    OPENPGPKEY,
-    // RFC 4034
-    RRSIG,
-    // RFC 1183
-    RP,
-    // RFC 2535
-    SIG,
-    // RFC 8162
-    SMIMEA,
-    // RFC 2782
-    SRV,
-    // RFC 4255
-    SSHFP,
-    // RFC 9460
-    SVCB,
-    TA,
-    // RFC 2930
-    TKEY,
-    // RFC 6698
-    TLSA,
-    // RFC 2845
-    TSIG,
-    // RFC 7553
-    URI,
-    // RFC 8976
-    ZONEMD,
-    /// EDNS
-    OPT,
+pub struct Type(u16);
+
+impl Type {
+    pub const fn from_bits(bits: u16) -> Self {
+        Self(bits)
+    }
+
+    pub const fn to_bits(&self) -> u16 {
+        self.0
+    }
+
+    /// IPv4 address record.
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const A: Self = Self(1);
+    /// Nameserver record.
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const NS: Self = Self(2);
+    /// Maildata record.
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const MD: Self = Self(3);
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const CNAME: Self = Self(5);
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const SOA: Self = Self(6);
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const PTR: Self = Self(12);
+    /// Mail exchange record.
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const MX: Self = Self(15);
+    /// Arbitrary text record.
+    ///
+    /// Specified in [RFC 1035](https://datatracker.ietf.org/doc/html/rfc1035).
+    pub const TXT: Self = Self(16);
+    // pub const MD: Self = Self(3);
+    // pub const MF: Self = Self(4);
+    // pub const CNAME: Self = Self(5);
+    // pub const SOA: Self = Self(6);
+    // pub const MB: Self = Self(7);
+    // pub const MINFO: Self = Self(8);
+    // pub const MR: Self = Self(9);
+    // pub const MX: Self = Self(10);
+    // pub const NULL: Self = Self(11);
+    pub const OPT: Self = Self(41);
+
+    /// IPv6 address record.
+    ///
+    /// Specified in [RFC 3596](https://datatracker.ietf.org/doc/html/rfc3596).
+    pub const AAAA: Self = Self(28);
 }
 
 macro_rules! enum_as_int {
@@ -634,66 +595,6 @@ macro_rules! enum_as_int {
     };
 }
 
-enum_as_int! {
-    Type,
-    1 => A,
-    2 => NS,
-    3 => MD,
-    4 => MF,
-    5 => CNAME,
-    6 => SOA,
-    7 => MB,
-    8 => MG,
-    9 => MR,
-    10 => NULL,
-    11 => WKS,
-    12 => PTR,
-    13 => HINFO,
-    14 => MINFO,
-    15 => MX,
-    16 => TXT,
-    28 => AAAA,
-    18 => AFSDB,
-    42 => APL,
-    257 => CAA,
-    60 => CDNSKEY,
-    59 => CDS,
-    37 => CERT,
-    62 => CSYNC,
-    49 => DHCID,
-    32769 => DLV,
-    39 => DNAME,
-    48 => DNSKEY,
-    43 => DS,
-    108 => EUI48,
-    109 => EUI64,
-    55 => HIP,
-    65 => HTTPS,
-    45 => IPSECKEY,
-    25 => KEY,
-    36 => KX,
-    29 => LOC,
-    35 => NAPTR,
-    47 => NSEC,
-    50 => NSEC3,
-    51 => NSEC3PARAM,
-    61 => OPENPGPKEY,
-    46 => RRSIG,
-    17 => RP,
-    24 => SIG,
-    53 => SMIMEA,
-    33 => SRV,
-    44 => SSHFP,
-    64 => SVCB,
-    32768 => TA,
-    249 => TKEY,
-    52 => TLSA,
-    250 => TSIG,
-    256 => URI,
-    63 => ZONEMD,
-    41 => OPT,
-}
-
 #[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
 pub enum Class {
     In,
@@ -718,7 +619,7 @@ impl ResourceRecord {
         let name = Fqdn::decode(reader)?;
 
         let rtype = reader.read_u16().ok_or(DecodeError::Eof)?;
-        let r#type = Type::from_u16(rtype).ok_or(DecodeError::InvalidType)?;
+        let r#type = Type::from_bits(rtype);
 
         // Skip OPT for now
         if r#type == Type::OPT {
@@ -752,7 +653,7 @@ impl ResourceRecord {
         B: BufMut,
     {
         self.name.encode(&mut buf);
-        buf.put_u16(self.r#type.to_u16());
+        buf.put_u16(self.r#type.to_bits());
         buf.put_u16(self.class.to_u16());
         buf.put_u32(self.ttl);
         buf.put_u16(self.rdata.len());
