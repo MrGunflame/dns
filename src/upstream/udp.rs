@@ -55,6 +55,10 @@ impl UdpResolver {
 
         let packet = Packet::decode(&buf[..]).map_err(ResolverError::Decode)?;
 
+        if packet.truncated {
+            return Err(ResolverError::Truncated);
+        }
+
         Ok(packet.answers)
     }
 }

@@ -19,6 +19,8 @@ pub enum ResolverError {
     Decode(DecodeError),
     NoAnswer,
     Http(reqwest::Error),
+    /// The message was too long and was truncated.
+    Truncated,
 }
 
 #[derive(Debug)]

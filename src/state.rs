@@ -88,11 +88,7 @@ impl State {
             answers.extend(self.resolve_origin(&question).await?);
         }
 
-        if !answers.is_empty() {
-            Ok(answers)
-        } else {
-            Err(ResolverError::NoAnswer)
-        }
+        Ok(answers)
     }
 
     async fn resolve_origin(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
