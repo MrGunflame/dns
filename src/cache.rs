@@ -1,6 +1,7 @@
-use std::collections::{BTreeMap, HashMap};
+use std::collections::BTreeMap;
 use std::time::{Duration, Instant};
 
+use hashbrown::HashMap;
 use parking_lot::RwLock;
 use tokio::sync::Notify;
 

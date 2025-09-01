@@ -4,8 +4,8 @@ pub mod udp;
 use std::io;
 use std::time::Duration;
 
-use ahash::HashMap;
 use futures::{select_biased, FutureExt};
+use hashbrown::HashMap;
 
 use crate::proto::{DecodeError, Fqdn, Question, ResourceRecord};
 
