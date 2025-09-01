@@ -43,9 +43,11 @@ impl State {
             // If we have an exact match in the cache, return it.
             if let Some(answer) = self.cache.get(&question) {
                 self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
-                tracing::debug!("using cached result (valid for {:?})", answer.ttl());
+                for answer in &answer {
+                    tracing::debug!("using cached result (valid for {:?})", answer.ttl());
+                }
 
-                answers.push(answer);
+                answers.extend(answer);
                 continue;
             }
 
@@ -60,17 +62,19 @@ impl State {
                     qtype: Type::CNAME,
                     qclass: question.qclass,
                 }) {
-                    let origin = match &answer.data {
-                        RecordData::CNAME(fqdn) => fqdn.clone(),
-                        _ => continue,
-                    };
+                    for answer in answer {
+                        let origin = match &answer.data {
+                            RecordData::CNAME(fqdn) => fqdn.clone(),
+                            _ => continue,
+                        };
 
-                    answers.push(answer);
-                    question_slot = Some(Question {
-                        name: origin,
-                        qtype: question.qtype,
-                        qclass: question.qclass,
-                    });
+                        answers.push(answer);
+                        question_slot = Some(Question {
+                            name: origin,
+                            qtype: question.qtype,
+                            qclass: question.qclass,
+                        });
+                    }
 
                     continue;
                 }
@@ -175,9 +179,11 @@ impl State {
             }
 
             if let Some(record) = self.cache.remove_first() {
-                self.metrics
-                    .cache_size
-                    .fetch_sub(record.data.len() as u64, Ordering::Relaxed);
+                for record in record {
+                    self.metrics
+                        .cache_size
+                        .fetch_sub(record.data.len() as u64, Ordering::Relaxed);
+                }
             }
         }
     }

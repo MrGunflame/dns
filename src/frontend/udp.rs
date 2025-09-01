@@ -1,6 +1,5 @@
 use std::io;
 use std::net::SocketAddr;
-use std::time::Duration;
 
 use futures::stream::{FuturesOrdered, StreamExt};
 use futures::{select_biased, FutureExt};
