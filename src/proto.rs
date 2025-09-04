@@ -456,21 +456,17 @@ impl RecordData {
             Type::SOA => Ok(Self::SOA(SoaData::decode(reader)?)),
             Type::PTR => Ok(Self::PTR(Fqdn::decode(reader)?)),
             Type::MX => Ok(Self::MX(MxData::decode(reader)?)),
-            Type::TXT => {
-                let buf = reader
-                    .remaining_buffer()
-                    .get(usize::from(len)..)
-                    .ok_or(DecodeError::Eof)?;
-                let txt = String::from_utf8(buf.to_vec()).map_err(|_| DecodeError::InvalidUtf8)?;
-                Ok(Self::TXT(txt))
-            }
             Type::AAAA => Ok(Self::AAAA(Ipv6Addr::decode(reader)?)),
             _ => {
                 let bytes = reader
                     .remaining_buffer()
-                    .get(usize::from(len)..)
-                    .ok_or(DecodeError::Eof)?;
-                Ok(Self::Other(typ, Bytes::from(bytes.to_vec())))
+                    .get(..usize::from(len))
+                    .ok_or(DecodeError::Eof)?
+                    .to_vec();
+
+                reader.advance(usize::from(len));
+
+                Ok(Self::Other(typ, Bytes::from(bytes)))
             }
         };
 
