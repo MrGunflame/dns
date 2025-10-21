@@ -1,6 +1,8 @@
 use crate::proto::{OpCode, Packet, Qr, ResourceRecord, ResponseCode};
 use crate::state::State;
+use crate::upstream::ResolverError;
 
+pub mod tcp;
 pub mod udp;
 
 pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
@@ -20,6 +22,10 @@ pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
                             name: answer.name,
                         });
                     }
+                }
+                Err(ResolverError::NonExistantDomain) => {
+                    response_code = ResponseCode::NameError;
+                    break;
                 }
                 Err(err) => {
                     tracing::error!("failed to resolve query: {:?}", err);

@@ -64,6 +64,10 @@ impl HttpsResolver {
 
         let resp = Packet::decode(&data).map_err(ResolverError::Decode)?;
 
-        Ok(resp.answers)
+        match resp.response_code {
+            ResponseCode::Ok => Ok(resp.answers),
+            ResponseCode::NameError => Err(ResolverError::NonExistantDomain),
+            _ => Err(ResolverError::NoAnswer),
+        }
     }
 }

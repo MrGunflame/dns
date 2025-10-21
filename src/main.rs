@@ -7,6 +7,7 @@ mod proto;
 mod state;
 mod upstream;
 
+use crate::frontend::tcp::TcpServer;
 use crate::frontend::udp::UdpServer;
 use config::Config;
 use state::State;
@@ -25,6 +26,12 @@ async fn main() {
     let mut handles = Vec::new();
     handles.push(tokio::task::spawn(async move {
         let server = UdpServer::new(addr).await;
+        if let Err(err) = server.poll(&state).await {
+            tracing::error!("failed to server DNS server: {}", err)
+        }
+    }));
+    handles.push(tokio::task::spawn(async move {
+        let server = TcpServer::new(addr).await;
         if let Err(err) = server.poll(&state).await {
             tracing::error!("failed to server DNS server: {}", err)
         }

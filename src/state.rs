@@ -101,6 +101,9 @@ impl State {
             tracing::debug!("trying upstream {}", resolver.addr());
             let answers = match resolver.resolve(&question).await {
                 Ok(answer) => answer,
+                Err(ResolverError::NonExistantDomain) => {
+                    return Err(ResolverError::NonExistantDomain)
+                }
                 Err(err) => {
                     tracing::error!("upstream {} failed: {:?}", resolver.addr(), err);
                     continue;

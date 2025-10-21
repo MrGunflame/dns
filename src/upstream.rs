@@ -16,6 +16,7 @@ use self::udp::UdpResolver;
 pub enum ResolverError {
     Io(io::Error),
     Timeout,
+    NonExistantDomain,
     Decode(DecodeError),
     NoAnswer,
     Http(reqwest::Error),
