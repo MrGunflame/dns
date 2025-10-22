@@ -7,16 +7,28 @@ mod proto;
 mod state;
 mod upstream;
 
+use std::path::PathBuf;
+
 use crate::frontend::tcp::TcpServer;
 use crate::frontend::udp::UdpServer;
+use clap::Parser;
 use config::Config;
 use state::State;
+
+#[derive(Clone, Debug, Parser)]
+struct Args {
+    /// Path to the config file.
+    #[arg(short, long, default_value = "config.json")]
+    config: PathBuf,
+}
 
 #[tokio::main]
 async fn main() {
     pretty_env_logger::init();
 
-    let config = Config::from_file("./config.json");
+    let args = Args::parse();
+
+    let config = Config::from_file(&args.config);
 
     let addr = config.bind;
     let http = config.http.clone();
