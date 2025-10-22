@@ -2,27 +2,59 @@ use std::time::Duration;
 
 use reqwest::header::HeaderValue;
 use reqwest::{Body, Client, ClientBuilder, Method, Request, Url};
+use thiserror::Error;
+use url::Host;
 
+use crate::config;
 use crate::proto::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
 
 use super::ResolverError;
+
+#[derive(Clone, Debug, Error)]
+pub enum CreateHttpsResolverError {
+    #[error("invalid url: {0}")]
+    InvalidUrl(url::ParseError),
+    #[error("url is missing host section")]
+    MissingHost,
+    #[error("url scheme is not https")]
+    NoHttps,
+}
 
 #[derive(Debug)]
 pub struct HttpsResolver {
     client: Client,
     pub url: Url,
     pub timeout: Duration,
+    pub host: HeaderValue,
 }
 
 impl HttpsResolver {
-    pub fn new(url: Url, timeout: Duration) -> Self {
+    pub fn new(config: &config::HttpResolver) -> Result<Self, CreateHttpsResolverError> {
         let client = ClientBuilder::new().use_rustls_tls().build().unwrap();
 
-        Self {
+        let url: Url = config
+            .url
+            .parse()
+            .map_err(CreateHttpsResolverError::InvalidUrl)?;
+
+        if url.scheme() != "https" {
+            return Err(CreateHttpsResolverError::NoHttps);
+        }
+
+        let url_host = url.host().ok_or(CreateHttpsResolverError::MissingHost)?;
+
+        if matches!(url_host, Host::Domain(_)) {
+            tracing::warn!(
+                "the https upstream address is a domain, not a socket address; the domain will be resolved using the system resolver. If the system is set to resolve using this server this will result in a feedback loop and never resolve."
+            );
+        }
+
+        Ok(Self {
             client,
             url,
-            timeout,
-        }
+            timeout: Duration::from_secs(config.timeout),
+            host: HeaderValue::from_str(&config.host).unwrap(),
+        })
     }
 
     pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
@@ -49,6 +81,7 @@ impl HttpsResolver {
             "content-type",
             HeaderValue::from_static("application/dns-message"),
         );
+        req.headers_mut().insert("host", self.host.clone());
 
         *req.body_mut() = Some(Body::from(buf));
 

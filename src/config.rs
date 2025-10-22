@@ -36,6 +36,7 @@ pub struct UdpResolver {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct HttpResolver {
     pub url: String,
+    pub host: String,
     pub timeout: u64,
 }
 

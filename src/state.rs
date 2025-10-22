@@ -1,7 +1,7 @@
 use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 use reqwest::Url;
 use tokio::sync::Notify;
 
@@ -102,7 +102,7 @@ impl State {
             let answers = match resolver.resolve(&question).await {
                 Ok(answer) => answer,
                 Err(ResolverError::NonExistantDomain) => {
-                    return Err(ResolverError::NonExistantDomain)
+                    return Err(ResolverError::NonExistantDomain);
                 }
                 Err(err) => {
                     tracing::error!("upstream {} failed: {:?}", resolver.addr(), err);
@@ -148,10 +148,7 @@ impl State {
                         Duration::from_secs(conf.timeout),
                     )),
                     crate::config::ResolverConfig::Https(conf) => {
-                        Resolver::Https(HttpsResolver::new(
-                            Url::parse(&conf.url).unwrap(),
-                            Duration::from_secs(conf.timeout),
-                        ))
+                        Resolver::Https(HttpsResolver::new(conf).unwrap())
                     }
                 };
 
