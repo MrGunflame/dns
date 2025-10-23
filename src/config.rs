@@ -19,7 +19,7 @@ pub enum Error {
 pub struct Config {
     pub frontend: Frontend,
     pub zones: HashMap<String, Zone>,
-    pub http: Http,
+    pub metrics: Metrics,
 }
 
 impl Config {
@@ -51,8 +51,8 @@ pub struct TcpFrontend {
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Http {
-    pub enabled: bool,
+pub struct Metrics {
+    pub enable: bool,
     pub bind: SocketAddr,
 }
 

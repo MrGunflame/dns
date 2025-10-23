@@ -53,7 +53,7 @@ async fn main() -> ExitCode {
         }
     }
 
-    let http = config.http.clone();
+    let http = config.metrics.clone();
     let state = State::new(zones);
     let state: &'static State = Box::leak(Box::new(state));
 
@@ -82,7 +82,7 @@ async fn main() -> ExitCode {
         state.cleanup().await;
     }));
 
-    if http.enabled {
+    if http.enable {
         handles.push(tokio::task::spawn(async move {
             http::run(http, state).await;
         }));
