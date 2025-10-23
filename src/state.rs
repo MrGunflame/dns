@@ -2,36 +2,36 @@ use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use futures::{FutureExt, select_biased};
-use reqwest::Url;
+use hashbrown::HashMap;
 use tokio::sync::Notify;
 
 use crate::cache::{Cache, Resource};
-use crate::config::Config;
+use crate::config::Upstream;
 use crate::metrics::Metrics;
 use crate::proto::{Fqdn, Question, RecordData, Type};
 use crate::upstream::https::HttpsResolver;
 use crate::upstream::udp::UdpResolver;
 use crate::upstream::{Resolver, ResolverError, Zones};
 
+const TIMEOUT: Duration = Duration::from_secs(4);
+
 pub struct State {
     pub cache: Cache,
     pub zones: Zones,
-    pub config: Config,
     pub metrics: Metrics,
     cache_wakeup: Notify,
 }
 
 impl State {
-    pub fn new(config: Config) -> Self {
-        let mut this = Self {
+    pub fn new(zones: HashMap<String, Vec<Upstream>>) -> Self {
+        let zones = generate_zones(&zones);
+
+        Self {
             cache: Cache::default(),
-            zones: Zones::default(),
+            zones,
             cache_wakeup: Notify::default(),
             metrics: Metrics::default(),
-            config,
-        };
-        this.generate_zones();
-        this
+        }
     }
 
     /// Resolve a single [`Question`].
@@ -137,27 +137,6 @@ impl State {
         Err(ResolverError::NoAnswer)
     }
 
-    pub fn generate_zones(&mut self) {
-        self.zones.clear();
-
-        for (zone, resolvers) in &self.config.zones {
-            for resolver in resolvers {
-                let resolver = match resolver {
-                    crate::config::ResolverConfig::Udp(conf) => Resolver::Udp(UdpResolver::new(
-                        conf.addr,
-                        Duration::from_secs(conf.timeout),
-                    )),
-                    crate::config::ResolverConfig::Https(conf) => {
-                        Resolver::Https(HttpsResolver::new(conf).unwrap())
-                    }
-                };
-
-                self.zones
-                    .insert(Fqdn::new_unchecked(zone.clone()), resolver);
-            }
-        }
-    }
-
     pub async fn cleanup(&self) -> ! {
         loop {
             let Some(instant) = self.cache.next_expiration() else {
@@ -183,4 +162,23 @@ impl State {
             }
         }
     }
+}
+
+fn generate_zones(input: &HashMap<String, Vec<Upstream>>) -> Zones {
+    let mut zones = Zones::default();
+
+    for (zone, resolvers) in input {
+        for resolver in resolvers {
+            let resolver = match resolver {
+                Upstream::Udp { addr } => Resolver::Udp(UdpResolver::new(*addr, TIMEOUT)),
+                Upstream::Https { url, host } => Resolver::Https(
+                    HttpsResolver::new(&url, host.as_ref().map(|v| v.as_str()), TIMEOUT).unwrap(),
+                ),
+            };
+
+            zones.insert(Fqdn::new_unchecked(zone.clone()), resolver);
+        }
+    }
+
+    zones
 }

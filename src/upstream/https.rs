@@ -5,7 +5,6 @@ use reqwest::{Body, Client, ClientBuilder, Method, Request, Url};
 use thiserror::Error;
 use url::Host;
 
-use crate::config;
 use crate::proto::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
 
 use super::ResolverError;
@@ -29,13 +28,14 @@ pub struct HttpsResolver {
 }
 
 impl HttpsResolver {
-    pub fn new(config: &config::HttpResolver) -> Result<Self, CreateHttpsResolverError> {
+    pub fn new(
+        url: &str,
+        host: Option<&str>,
+        timeout: Duration,
+    ) -> Result<Self, CreateHttpsResolverError> {
         let client = ClientBuilder::new().use_rustls_tls().build().unwrap();
 
-        let url: Url = config
-            .url
-            .parse()
-            .map_err(CreateHttpsResolverError::InvalidUrl)?;
+        let url: Url = url.parse().map_err(CreateHttpsResolverError::InvalidUrl)?;
 
         if url.scheme() != "https" {
             return Err(CreateHttpsResolverError::NoHttps);
@@ -49,11 +49,16 @@ impl HttpsResolver {
             );
         }
 
+        let host = match host {
+            Some(host) => HeaderValue::from_str(&host).unwrap(),
+            None => HeaderValue::from_str(&url_host.to_string()).unwrap(),
+        };
+
         Ok(Self {
             client,
             url,
-            timeout: Duration::from_secs(config.timeout),
-            host: HeaderValue::from_str(&config.host).unwrap(),
+            timeout,
+            host,
         })
     }
 
