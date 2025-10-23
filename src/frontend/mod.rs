@@ -1,3 +1,5 @@
+use std::time::Instant;
+
 use crate::proto::{OpCode, Packet, Qr, ResourceRecord, ResponseCode};
 use crate::state::State;
 use crate::upstream::ResolverError;
@@ -9,7 +11,11 @@ pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
     let mut answers = Vec::new();
     let mut response_code = ResponseCode::Ok;
 
+    // We don't count non-RD queries for metrics because they don't
+    // actually require any work.
     if packet.recursion_desired {
+        let now = Instant::now();
+
         for question in &packet.questions {
             match state.resolve(question).await {
                 Ok(resp) => {
@@ -40,6 +46,8 @@ pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
                 }
             };
         }
+
+        state.metrics.resolve_time.insert(now.elapsed());
     }
 
     Some(Packet {

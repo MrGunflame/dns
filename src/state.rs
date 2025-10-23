@@ -1,4 +1,3 @@
-use std::sync::atomic::Ordering;
 use std::time::{Duration, Instant};
 
 use futures::{FutureExt, select_biased};
@@ -42,7 +41,7 @@ impl State {
         while let Some(question) = question_slot.take() {
             // If we have an exact match in the cache, return it.
             if let Some(answer) = self.cache.get(&question) {
-                self.metrics.cache_hits.fetch_add(1, Ordering::Relaxed);
+                self.metrics.cache_hits_noerror.inc();
                 for answer in &answer {
                     tracing::debug!("using cached result (valid for {:?})", answer.ttl());
                 }
@@ -86,6 +85,7 @@ impl State {
             // multiple times, we have a dependency on the previous record
             // and cannot resolve concurrently.
             answers.extend(self.resolve_origin(&question).await?);
+            self.metrics.cache_misses_noerror.inc();
         }
 
         Ok(answers)
@@ -123,9 +123,7 @@ impl State {
                 if answer.ttl != 0 {
                     self.cache.insert(res.clone());
                     self.cache_wakeup.notify_one();
-                    self.metrics
-                        .cache_size
-                        .fetch_add(res.data.len() as u64, Ordering::Relaxed);
+                    self.metrics.cache_size.add(res.data.len() as u64);
                 }
 
                 resources.push(res);
@@ -155,9 +153,7 @@ impl State {
 
             if let Some(record) = self.cache.remove_first() {
                 for record in record {
-                    self.metrics
-                        .cache_size
-                        .fetch_sub(record.data.len() as u64, Ordering::Relaxed);
+                    self.metrics.cache_size.sub(record.data.len() as u64);
                 }
             }
         }

@@ -54,11 +54,26 @@ impl Service<Request<Incoming>> for RootService {
 async fn metrics(state: &State) -> Response<Full<Bytes>> {
     let mut body = String::new();
     for (key, val) in [
-        ("dns_cache_hits", &state.metrics.cache_hits),
-        ("dns_cache_misses", &state.metrics.cache_misses),
-        ("dns_cache_size", &state.metrics.cache_size),
+        (
+            "dns_cache_hits{status=\"noerror\"}",
+            state.metrics.cache_hits_noerror.get(),
+        ),
+        (
+            "dns_cache_misses{status=\"noerror\"}",
+            state.metrics.cache_misses_noerror.get(),
+        ),
+        ("dns_cache_size", state.metrics.cache_size.get()),
     ] {
-        writeln!(body, "{} {}", key, val.load(Ordering::Relaxed)).unwrap();
+        writeln!(body, "{} {}", key, val).unwrap();
+    }
+
+    {
+        let buckets = state.metrics.resolve_time.buckets.read();
+        for (bucket, counter) in &*buckets {
+            let nanos = 2_u128.pow(*bucket);
+
+            writeln!(body, "resolve_time{{ns=\"{}\"}} {}", nanos, counter.get()).unwrap();
+        }
     }
 
     Response::builder()
