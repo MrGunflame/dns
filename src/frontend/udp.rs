@@ -2,7 +2,7 @@ use std::io;
 use std::net::SocketAddr;
 
 use futures::stream::{FuturesOrdered, StreamExt};
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 use tokio::net::UdpSocket;
 
 use crate::frontend::handle_query;
@@ -67,6 +67,8 @@ impl UdpServer {
 }
 
 async fn handle_request(packet: Packet, addr: SocketAddr, socket: &UdpSocket, state: &State) {
+    state.metrics.requests_total_udp.inc();
+
     let Some(resp) = handle_query(state, packet).await else {
         return;
     };

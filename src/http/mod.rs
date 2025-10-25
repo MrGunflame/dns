@@ -54,6 +54,14 @@ async fn metrics(state: &State) -> Response<Full<Bytes>> {
     let mut body = String::new();
     for (key, val) in [
         (
+            "dns_requests_total{protocol=\"udp\"}",
+            state.metrics.requests_total_udp.get(),
+        ),
+        (
+            "dns_requests_total{protocol=\"tcp\"}",
+            state.metrics.requests_total_tcp.get(),
+        ),
+        (
             "dns_cache_hits{status=\"noerror\"}",
             state.metrics.cache_hits_noerror.get(),
         ),

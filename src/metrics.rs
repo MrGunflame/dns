@@ -6,6 +6,10 @@ use parking_lot::RwLock;
 
 #[derive(Debug, Default)]
 pub struct Metrics {
+    /// Total number of requests received over UDP.
+    pub requests_total_udp: Counter,
+    /// Total number of requests receiver over TCP.
+    pub requests_total_tcp: Counter,
     pub cache_hits_noerror: Counter,
     pub cache_misses_noerror: Counter,
     pub cache_hits_nodata: Counter,

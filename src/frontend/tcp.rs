@@ -89,6 +89,7 @@ async fn handle_conn(mut stream: TcpStream, state: &State) {
                     res = read_query(&mut reader).fuse() => {
                         let packet = res?;
                         tasks.push_back(handle_query(state, packet));
+                        state.metrics.requests_total_tcp.inc();
                     }
                 }
             } else {
