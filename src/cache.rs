@@ -98,7 +98,9 @@ impl Cache {
     pub fn remove_first(&self) -> Option<CacheEntry> {
         if let Some((valid_until, (qname, qclass, qtype))) = self.expiration.write().pop_first() {
             let mut entries = self.entries.write();
-            let entry = entries.get_mut(&(qname.clone(), qclass)).unwrap();
+            let Some(entry) = entries.get_mut(&(qname.clone(), qclass)) else {
+                return None;
+            };
 
             match entry {
                 DomainState::NonExistant(e) => {
