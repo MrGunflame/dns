@@ -80,13 +80,17 @@ impl Cache {
         if entry.status == Status::NxDomain {
             e.insert(DomainState::NonExistant(entry));
         } else {
-            let mut e = e.insert(DomainState::Existant(HashMap::new()));
+            let state = e.or_insert_with(|| DomainState::Existant(HashMap::new()));
 
-            match e.get_mut() {
-                DomainState::Existant(e) => {
-                    e.insert(entry.qtype, entry);
+            match state {
+                DomainState::Existant(map) => {
+                    map.insert(entry.qtype, entry);
                 }
-                DomainState::NonExistant(_) => (),
+                DomainState::NonExistant(_) => {
+                    let mut map = HashMap::new();
+                    map.insert(entry.qtype, entry);
+                    *state = DomainState::Existant(map);
+                }
             }
         }
     }
