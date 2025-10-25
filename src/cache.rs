@@ -119,7 +119,7 @@ impl Cache {
                     // If a cache record get overwritten we don't update
                     // the expiration timer queue. The time we have may
                     // no longer be valid.
-                    if map.get(&qtype).is_none_or(|v| valid_until == v.expires) {
+                    if map.get(&qtype).is_none_or(|v| valid_until != v.expires) {
                         return None;
                     }
 
