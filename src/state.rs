@@ -4,10 +4,10 @@ use futures::{FutureExt, select_biased};
 use hashbrown::HashMap;
 use tokio::sync::Notify;
 
-use crate::cache::{Cache, Resource};
+use crate::cache::{Cache, CacheEntry, Resource, Status};
 use crate::config::Upstream;
 use crate::metrics::Metrics;
-use crate::proto::{Fqdn, Question, RecordData, Type};
+use crate::proto::{Fqdn, Question, RecordData, ResponseCode, Type};
 use crate::upstream::https::HttpsResolver;
 use crate::upstream::udp::UdpResolver;
 use crate::upstream::{Resolver, ResolverError, Zones};
@@ -34,19 +34,48 @@ impl State {
     }
 
     /// Resolve a single [`Question`].
-    pub async fn resolve(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
-        let mut answers = Vec::new();
+    pub async fn resolve(&self, question: &Question) -> Result<Response, ResolverError> {
+        let mut resp = Response {
+            code: ResponseCode::Ok,
+            answers: Vec::new(),
+            authority: Vec::new(),
+            additional: Vec::new(),
+        };
 
         let mut question_slot = Some(question.clone());
         while let Some(question) = question_slot.take() {
             // If we have an exact match in the cache, return it.
-            if let Some(answer) = self.cache.get(&question) {
-                self.metrics.cache_hits_noerror.inc();
-                for answer in &answer {
-                    tracing::debug!("using cached result (valid for {:?})", answer.ttl());
+            if let Some(entry) = self
+                .cache
+                .get(&question.name, question.qtype, question.qclass)
+            {
+                match entry.status {
+                    Status::Ok => {
+                        self.metrics.cache_hits_noerror.inc();
+
+                        resp.answers.extend(entry.answers);
+                    }
+                    Status::NoData => {
+                        self.metrics.cache_hits_nodata.inc();
+
+                        resp.authority = entry.authority;
+                        resp.additional = entry.additional;
+                    }
+                    Status::NxDomain => {
+                        self.metrics.cache_hits_nxdomain.inc();
+
+                        resp.code = ResponseCode::NameError;
+                        resp.answers = entry.answers;
+                        resp.authority = entry.authority;
+                        resp.additional = entry.additional;
+
+                        // An NXDOMAIN hit is identified by <QNAME, QCLASS>. In other words
+                        // there are no records of any type for this QNAME. We don't have to
+                        // continue searched for a CNAME record.
+                        return Ok(resp);
+                    }
                 }
 
-                answers.extend(answer);
                 continue;
             }
 
@@ -56,23 +85,32 @@ impl State {
             // at and repeat the `question` with the new FQDN.
             // See https://datatracker.ietf.org/doc/html/rfc1034#section-3.6.2
             if question.qtype != Type::CNAME {
-                if let Some(answer) = self.cache.get(&Question {
-                    name: question.name.clone(),
-                    qtype: Type::CNAME,
-                    qclass: question.qclass,
-                }) {
-                    for answer in answer {
-                        let origin = match &answer.data {
-                            RecordData::CNAME(fqdn) => fqdn.clone(),
-                            _ => continue,
-                        };
+                if let Some(entry) = self.cache.get(&question.name, Type::CNAME, question.qclass) {
+                    match entry.status {
+                        Status::Ok => {
+                            self.metrics.cache_hits_noerror.inc();
 
-                        answers.push(answer);
-                        question_slot = Some(Question {
-                            name: origin,
-                            qtype: question.qtype,
-                            qclass: question.qclass,
-                        });
+                            resp.answers.extend(entry.answers);
+                        }
+                        Status::NoData => {
+                            self.metrics.cache_hits_nodata.inc();
+
+                            resp.authority = entry.authority;
+                            resp.additional = entry.additional;
+                        }
+                        // An NXDOMAIN hit is identified by <QNAME, QCLASS>. Since we have already
+                        // checked for this above, this can only happen if we have a race condition.
+                        // However since we are still using the same <QNAME, QCLASS> we can still use
+                        // the response.
+                        Status::NxDomain => {
+                            self.metrics.cache_hits_nxdomain.inc();
+
+                            resp.code = ResponseCode::NameError;
+                            resp.answers = entry.answers;
+                            resp.authority = entry.authority;
+                            resp.additional = entry.additional;
+                            return Ok(resp);
+                        }
                     }
 
                     continue;
@@ -84,14 +122,26 @@ impl State {
             // Note that blocking is ok here since if this function is called
             // multiple times, we have a dependency on the previous record
             // and cannot resolve concurrently.
-            answers.extend(self.resolve_origin(&question).await?);
-            self.metrics.cache_misses_noerror.inc();
+            resp = self.resolve_origin(&question).await?;
+
+            match resp.code {
+                ResponseCode::Ok if resp.answers.is_empty() => {
+                    self.metrics.cache_misses_nodata.inc();
+                }
+                ResponseCode::Ok => {
+                    self.metrics.cache_misses_noerror.inc();
+                }
+                ResponseCode::NameError => {
+                    self.metrics.cache_misses_nxdomain.inc();
+                }
+                _ => (),
+            }
         }
 
-        Ok(answers)
+        Ok(resp)
     }
 
-    async fn resolve_origin(&self, question: &Question) -> Result<Vec<Resource>, ResolverError> {
+    async fn resolve_origin(&self, question: &Question) -> Result<Response, ResolverError> {
         let Some(resolvers) = self.zones.lookup(&question.name) else {
             tracing::error!("no nameservers for root zone configured");
             return Err(ResolverError::NoAnswer);
@@ -99,7 +149,7 @@ impl State {
 
         for resolver in resolvers {
             tracing::debug!("trying upstream {}", resolver.addr());
-            let answers = match resolver.resolve(&question).await {
+            let resp = match resolver.resolve(&question).await {
                 Ok(answer) => answer,
                 Err(ResolverError::NonExistantDomain) => {
                     return Err(ResolverError::NonExistantDomain);
@@ -110,26 +160,46 @@ impl State {
                 }
             };
 
-            let mut resources = Vec::new();
-            for answer in answers {
-                let res = Resource {
-                    name: answer.name,
-                    r#type: answer.r#type,
-                    class: answer.class,
-                    data: answer.rdata.into(),
-                    valid_until: Instant::now() + Duration::from_secs(answer.ttl.into()),
-                };
+            // It is possible for each RR to contain a different TTL, but such behavior
+            // is deprecated in RFC2181.
+            // We will choose the lowest TTL value as the TTL value for our cache.
+            let mut valid_until = resp.answers.iter().map(|v| v.valid_until).min();
 
-                if answer.ttl != 0 {
-                    self.cache.insert(res.clone());
-                    self.cache_wakeup.notify_one();
-                    self.metrics.cache_size.add(res.data.len() as u64);
+            // NXDOMAIN and NODATA use the MININUM TTL from the attached SOA record.
+            if resp.answers.is_empty() || resp.code == ResponseCode::NameError {
+                if let Some(data) = resp.authority.iter().find_map(|r| match &r.data {
+                    RecordData::SOA(data) => Some(data),
+                    _ => None,
+                }) {
+                    valid_until = Some(Instant::now() + Duration::from_secs(data.minimum.into()));
                 }
-
-                resources.push(res);
             }
 
-            return Ok(resources);
+            if let Some(valid_until) = valid_until {
+                let entry = CacheEntry {
+                    status: match resp.code {
+                        ResponseCode::Ok if resp.answers.is_empty() => Status::NoData,
+                        ResponseCode::Ok => Status::Ok,
+                        ResponseCode::NameError => Status::NxDomain,
+                        // FIXME: Don't do this.
+                        _ => Status::Ok,
+                    },
+                    qname: question.name.clone(),
+                    qclass: question.qclass,
+                    qtype: question.qtype,
+                    expires: valid_until,
+                    answers: resp.answers.clone(),
+                    additional: resp.additional.clone(),
+                    authority: resp.authority.clone(),
+                };
+
+                self.metrics.cache_size.add(entry.size_estimate() as u64);
+                self.cache.insert(entry);
+
+                self.cache_wakeup.notify_one();
+            }
+
+            return Ok(resp);
         }
 
         Err(ResolverError::NoAnswer)
@@ -151,10 +221,8 @@ impl State {
                 _ = tokio::time::sleep_until(instant.into()).fuse() => (),
             }
 
-            if let Some(record) = self.cache.remove_first() {
-                for record in record {
-                    self.metrics.cache_size.sub(record.data.len() as u64);
-                }
+            if let Some(entry) = self.cache.remove_first() {
+                self.metrics.cache_size.sub(entry.size_estimate() as u64);
             }
         }
     }
@@ -177,4 +245,12 @@ fn generate_zones(input: &HashMap<String, Vec<Upstream>>) -> Zones {
     }
 
     zones
+}
+
+#[derive(Clone, Debug)]
+pub struct Response {
+    pub code: ResponseCode,
+    pub answers: Vec<Resource>,
+    pub authority: Vec<Resource>,
+    pub additional: Vec<Resource>,
 }

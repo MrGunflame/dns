@@ -8,6 +8,10 @@ use parking_lot::RwLock;
 pub struct Metrics {
     pub cache_hits_noerror: Counter,
     pub cache_misses_noerror: Counter,
+    pub cache_hits_nodata: Counter,
+    pub cache_misses_nodata: Counter,
+    pub cache_hits_nxdomain: Counter,
+    pub cache_misses_nxdomain: Counter,
     pub cache_size: Gauge,
     pub resolve_time: Histogram,
     pub upstream_times: HashMap<String, Histogram>,

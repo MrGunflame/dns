@@ -2,12 +2,14 @@ pub mod https;
 pub mod udp;
 
 use std::io;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
-use futures::{select_biased, FutureExt};
+use futures::{FutureExt, select_biased};
 use hashbrown::HashMap;
 
+use crate::cache::Resource;
 use crate::proto::{DecodeError, Fqdn, Question, ResourceRecord};
+use crate::state::Response;
 
 use self::https::HttpsResolver;
 use self::udp::UdpResolver;
@@ -31,20 +33,35 @@ pub enum Resolver {
 }
 
 impl Resolver {
-    pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Response, ResolverError> {
         let timeout = tokio::time::sleep(self.timeout()).fuse();
         futures::pin_mut!(timeout);
 
-        match self {
+        let packet = match self {
             Self::Udp(resolver) => select_biased! {
-                res = resolver.resolve(question).fuse() => res,
-                _ = timeout => Err(ResolverError::Timeout),
+                res = resolver.resolve(question).fuse() => res?,
+                _ = timeout => return Err(ResolverError::Timeout),
             },
             Self::Https(resolver) => select_biased! {
-                res = resolver.resolve(question).fuse() => res,
-                _ = timeout => Err(ResolverError::Timeout),
+                res = resolver.resolve(question).fuse() => res?,
+                _ = timeout => return Err(ResolverError::Timeout),
             },
-        }
+        };
+
+        let map_rr_to_res = |rr: ResourceRecord| Resource {
+            name: rr.name,
+            r#type: rr.r#type,
+            class: rr.class,
+            data: rr.rdata,
+            valid_until: Instant::now() + Duration::from_secs(rr.ttl.into()),
+        };
+
+        Ok(Response {
+            code: packet.response_code,
+            answers: packet.answers.into_iter().map(map_rr_to_res).collect(),
+            authority: packet.authority.into_iter().map(map_rr_to_res).collect(),
+            additional: packet.additional.into_iter().map(map_rr_to_res).collect(),
+        })
     }
 
     pub fn addr(&self) -> String {

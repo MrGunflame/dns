@@ -1,6 +1,5 @@
 use std::convert::Infallible;
 use std::fmt::Write;
-use std::sync::atomic::Ordering;
 
 use bytes::Bytes;
 use futures::future::BoxFuture;
@@ -61,6 +60,22 @@ async fn metrics(state: &State) -> Response<Full<Bytes>> {
         (
             "dns_cache_misses{status=\"noerror\"}",
             state.metrics.cache_misses_noerror.get(),
+        ),
+        (
+            "dns_cache_hits{status=\"nodata\"}",
+            state.metrics.cache_hits_nodata.get(),
+        ),
+        (
+            "dns_cache_misses{status=\"nodata\"}",
+            state.metrics.cache_misses_nodata.get(),
+        ),
+        (
+            "dns_cache_hits{status=\"nxdomain\"}",
+            state.metrics.cache_hits_nxdomain.get(),
+        ),
+        (
+            "dns_cache_misses{status=\"nxdomain\"}",
+            state.metrics.cache_misses_nxdomain.get(),
         ),
         ("dns_cache_size", state.metrics.cache_size.get()),
     ] {

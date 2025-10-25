@@ -62,7 +62,7 @@ impl HttpsResolver {
         })
     }
 
-    pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Packet, ResolverError> {
         let packet = Packet {
             transaction_id: rand::random(),
             qr: Qr::Request,
@@ -100,12 +100,6 @@ impl HttpsResolver {
 
         let data = resp.bytes().await.map_err(ResolverError::Http)?;
 
-        let resp = Packet::decode(&data).map_err(ResolverError::Decode)?;
-
-        match resp.response_code {
-            ResponseCode::Ok => Ok(resp.answers),
-            ResponseCode::NameError => Err(ResolverError::NonExistantDomain),
-            _ => Err(ResolverError::NoAnswer),
-        }
+        Packet::decode(&data).map_err(ResolverError::Decode)
     }
 }

@@ -3,7 +3,7 @@ use std::time::Duration;
 
 use tokio::net::UdpSocket;
 
-use crate::proto::{OpCode, Packet, Qr, Question, ResourceRecord, ResponseCode};
+use crate::proto::{OpCode, Packet, Qr, Question, ResponseCode};
 
 use super::ResolverError;
 
@@ -18,7 +18,7 @@ impl UdpResolver {
         Self { addr, timeout }
     }
 
-    pub async fn resolve(&self, question: &Question) -> Result<Vec<ResourceRecord>, ResolverError> {
+    pub async fn resolve(&self, question: &Question) -> Result<Packet, ResolverError> {
         let local_addr = match self.addr {
             SocketAddr::V4(_) => SocketAddr::V4(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, 0)),
             SocketAddr::V6(_) => SocketAddr::V6(SocketAddrV6::new(Ipv6Addr::UNSPECIFIED, 0, 0, 0)),
@@ -59,6 +59,6 @@ impl UdpResolver {
             return Err(ResolverError::Truncated);
         }
 
-        Ok(packet.answers)
+        Ok(packet)
     }
 }

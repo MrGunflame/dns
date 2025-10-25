@@ -1,5 +1,6 @@
 use std::time::Instant;
 
+use crate::cache::Resource;
 use crate::proto::{OpCode, Packet, Qr, ResourceRecord, ResponseCode};
 use crate::state::State;
 use crate::upstream::ResolverError;
@@ -9,6 +10,8 @@ pub mod udp;
 
 pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
     let mut answers = Vec::new();
+    let mut authority = Vec::new();
+    let mut additional = Vec::new();
     let mut response_code = ResponseCode::Ok;
 
     // We don't count non-RD queries for metrics because they don't
@@ -19,15 +22,18 @@ pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
         for question in &packet.questions {
             match state.resolve(question).await {
                 Ok(resp) => {
-                    for answer in resp {
-                        answers.push(ResourceRecord {
-                            r#type: answer.r#type,
-                            class: answer.class,
-                            ttl: answer.ttl().as_secs() as u32,
-                            rdata: answer.data,
-                            name: answer.name,
-                        });
-                    }
+                    let map_res_to_rr = |res: Resource| ResourceRecord {
+                        ttl: res.ttl().as_secs() as u32,
+                        name: res.name,
+                        r#type: res.r#type,
+                        class: res.class,
+                        rdata: res.data,
+                    };
+
+                    response_code = resp.code;
+                    answers = resp.answers.into_iter().map(map_res_to_rr).collect();
+                    authority = resp.authority.into_iter().map(map_res_to_rr).collect();
+                    additional = resp.additional.into_iter().map(map_res_to_rr).collect();
                 }
                 Err(ResolverError::NonExistantDomain) => {
                     response_code = ResponseCode::NameError;
@@ -61,7 +67,7 @@ pub async fn handle_query(state: &State, packet: Packet) -> Option<Packet> {
         response_code,
         questions: packet.questions,
         answers,
-        additional: Vec::new(),
-        authority: Vec::new(),
+        additional,
+        authority,
     })
 }
